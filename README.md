@@ -8,14 +8,14 @@ Post a rich-text message to a [Feishu (飞书) custom bot](https://open.feishu.c
 |-----------|----------|-------------|
 | `webhook` | yes | Custom bot webhook URL (store in a secret) |
 | `secret`  | no  | Bot signature secret, required only if signature verification is enabled |
-| `title`   | no  | Rich-text title |
-| `message` | no  | Rich-text body, one line per paragraph |
-| `link`    | no  | URL appended as a "查看详情" hyperlink |
+| `title`   | no  | Rich-text title (non-`review_requested` events) |
+| `message` | no  | Rich-text body, one line per paragraph (non-`review_requested` events) |
+| `link`    | no  | URL appended as a "查看详情" hyperlink (non-`review_requested` events) |
 | `reviewer-map` | no | YAML map of GitHub login → Feishu open_id (`ou_...`), one entry per line, unlimited entries; on `pull_request` `review_requested` events the action composes a review-request card and @-mentions the reviewer this event assigned |
 | `title-template` | no | Title template for `review_requested` events (see variables below) |
 | `message-template` | no | Body template for `review_requested` events, one line per paragraph |
 
-When the workflow runs on a `review_requested` event, `title` / `message` / `link` become optional overrides — the action composes the card from the event payload (`requested_reviewer`, PR number/title/url, author) and the templates. GitHub dispatches one `review_requested` event per requested reviewer, so each reviewer is mentioned exactly once. Reviewers missing from `reviewer-map` produce a `::warning::` annotation and a plain-text `@login` segment.
+Two mutually exclusive modes: `review_requested` events are always composed from the templates and event payload (`title` / `message` / `link` are ignored there); every other event uses the explicit `title` / `message` / `link` inputs. GitHub dispatches one `review_requested` event per requested reviewer, so each reviewer is mentioned exactly once. Reviewers missing from `reviewer-map` produce a `::warning::` annotation and a plain-text `@login` segment.
 
 ### Template variables
 

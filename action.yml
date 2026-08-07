@@ -8,13 +8,13 @@ inputs:
     description: 'Bot sign secret, when signature verification is enabled'
     required: false
   title:
-    description: 'Optional rich-text title'
+    description: 'Rich-text title (non-review_requested events)'
     required: false
   message:
-    description: 'Optional rich-text body, one line per paragraph'
+    description: 'Rich-text body, one line per paragraph (non-review_requested events)'
     required: false
   link:
-    description: 'Optional URL appended as a "查看详情" hyperlink'
+    description: 'URL appended as a "查看详情" hyperlink (non-review_requested events)'
     required: false
   reviewer-map:
     description: 'YAML map of GitHub login to Feishu open_id (ou_...), used to @ the reviewer on pull_request review_requested events'

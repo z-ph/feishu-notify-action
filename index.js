@@ -38,18 +38,19 @@ function readEvent() {
   const inputs = readInputs();
   const event = readEvent();
 
-  let title = inputs.title;
+  let title;
   let content;
   if (event.action === 'review_requested') {
+    // review_requested 只走模板组装,title/message/link 输入在此模式下无意义。
     const reviewEvent = parseOrThrow(reviewRequestedEventSchema, event, 'review_requested event');
     const review = assembleReviewRequest(reviewEvent, inputs.reviewerMap, {
       title: inputs.titleTemplate,
       message: inputs.messageTemplate,
     });
-    // 显式 title/message 输入优先级最高，其次模板，最后内置默认。
-    title = title || review.title;
-    content = inputs.message ? assembleGenericMessage(inputs.message, '') : review.lines;
+    title = review.title;
+    content = review.lines;
   } else {
+    title = inputs.title;
     content = assembleGenericMessage(inputs.message, inputs.link);
   }
 
