@@ -46,7 +46,7 @@ function reviewRequestContent(event, reviewerMap) {
     const feishuId = reviewerMap[String(reviewer.login).toLowerCase()];
     lines.push(
       feishuId
-        ? [{ tag: 'at', user_id: feishuId }, { tag: 'text', text: ' 请抽空评审，谢谢' }]
+        ? [{ tag: 'at', user_id: feishuId, user_name: reviewer.login }, { tag: 'text', text: ' 请抽空评审，谢谢' }]
         : [{ tag: 'text', text: `请 @${reviewer.login} 抽空评审，谢谢` }],
     );
   } else {
@@ -92,11 +92,13 @@ function reviewRequestContent(event, reviewerMap) {
     payload.sign = createHmac('sha256', `${timestamp}\n${secret}`).update('').digest('base64');
   }
 
+  console.log('Feishu payload:', JSON.stringify(payload));
   const res = await fetch(webhook, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
   const body = await res.json();
+  console.log('Feishu response:', JSON.stringify(body));
   if (body.code !== 0) throw new Error(`Feishu error: ${JSON.stringify(body)}`);
 })();
