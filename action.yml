@@ -19,6 +19,10 @@ inputs:
   reviewer-map:
     description: 'YAML map of GitHub login to Feishu open_id (ou_...), used to @ the reviewer on pull_request review_requested events'
     required: false
+  enable-mention:
+    description: "'true' to @ the requested reviewer via reviewer-map; missing mapping then fails the step. 'false' (default) sends the card without any mention"
+    required: false
+    default: 'false'
   title-template:
     description: 'Title template for review_requested events, variables: {{pr.number}} {{pr.title}} {{pr.url}} {{author}} {{reviewer}} {{team}}'
     required: false

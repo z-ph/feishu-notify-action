@@ -11,11 +11,12 @@ Post a rich-text message to a [Feishu (飞书) custom bot](https://open.feishu.c
 | `title`   | no  | Rich-text title (non-`review_requested` events) |
 | `message` | no  | Rich-text body, one line per paragraph (non-`review_requested` events) |
 | `link`    | no  | URL appended as a "查看详情" hyperlink (non-`review_requested` events) |
-| `reviewer-map` | no | YAML map of GitHub login → Feishu open_id (`ou_...`), one entry per line, unlimited entries; on `pull_request` `review_requested` events the action composes a review-request card and @-mentions the reviewer this event assigned |
+| `reviewer-map` | no | YAML map of GitHub login → Feishu open_id (`ou_...`), one entry per line, unlimited entries; required when `enable-mention` is on |
+| `enable-mention` | no | `'true'` @-mentions the reviewer via `reviewer-map` (missing mapping **fails the step**); default `'false'` sends the card without any mention |
 | `title-template` | no | Title template for `review_requested` events (see variables below) |
 | `message-template` | no | Body template for `review_requested` events, one line per paragraph |
 
-Two mutually exclusive modes: `review_requested` events are always composed from the templates and event payload (`title` / `message` / `link` are ignored there); every other event uses the explicit `title` / `message` / `link` inputs. GitHub dispatches one `review_requested` event per requested reviewer, so each reviewer is mentioned exactly once. Reviewers missing from `reviewer-map` produce a `::warning::` annotation and a plain-text `@login` segment.
+Two mutually exclusive modes: `review_requested` events are always composed from the templates and event payload (`title` / `message` / `link` are ignored there); every other event uses the explicit `title` / `message` / `link` inputs. GitHub dispatches one `review_requested` event per requested reviewer, so each reviewer is mentioned exactly once. There is no degraded-mention fallback: with `enable-mention: 'true'` an unmapped reviewer is a configuration error and fails loudly.
 
 ### Template variables
 
@@ -73,6 +74,7 @@ jobs:
         with:
           webhook: ${{ secrets.FEISHU_WEBHOOK_URL }}
           secret: ${{ secrets.FEISHU_SECRET }}
+          enable-mention: 'true'
           reviewer-map: |
             # GitHub 登录名: 飞书 open_id
             octocat: ou_7d8a2f1c9b4e6a5d8c3f2e1a0b9c8d7e

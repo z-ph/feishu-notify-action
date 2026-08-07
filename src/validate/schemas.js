@@ -22,6 +22,10 @@ const inputsSchema = z.object({
   message: z.string().default(''),
   link: z.string().default(''),
   reviewerMap: z.record(z.string().min(1, 'empty GitHub login'), openId).default({}),
+  enableMention: z
+    .enum(['true', 'false'], { message: 'must be the string "true" or "false"' })
+    .default('false')
+    .transform((v) => v === 'true'),
   titleTemplate: z.string().default(''),
   messageTemplate: z.string().default(''),
 });

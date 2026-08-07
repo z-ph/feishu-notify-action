@@ -107,30 +107,25 @@ test('templates: renders string and element tokens', () => {
 
 // ---- assemble: review request ----
 
-test('review: mapped reviewer produces at element, defaults applied', () => {
+test('review: mention on + mapped reviewer produces at element', () => {
   const event = parseOrThrow(reviewRequestedEventSchema, baseEvent, 'event');
-  const { title, lines } = assembleReviewRequest(event, { csmht: OPEN_ID }, {});
+  const { title, lines } = assembleReviewRequest(event, { csmht: OPEN_ID }, {}, true);
   assert.equal(title, '请求代码评审：feat: x');
-  const mention = lines[2][0];
-  assert.deepEqual(mention, { tag: 'at', user_id: OPEN_ID, user_name: 'csmht' });
+  assert.deepEqual(lines[2][0], { tag: 'at', user_id: OPEN_ID, user_name: 'csmht' });
   assert.deepEqual(lines[0][0], { tag: 'a', text: 'PR #38', href: 'https://github.com/a/b/pull/38' });
   // 组装结果必须能通过输出校验
   parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { title, content: lines } } } }, 'payload');
 });
 
-test('review: unmapped reviewer degrades to text with a loud warning', () => {
-  const warnings = [];
-  const original = console.log;
-  console.log = (msg) => warnings.push(msg);
-  try {
-    const event = parseOrThrow(reviewRequestedEventSchema, baseEvent, 'event');
-    const { lines } = assembleReviewRequest(event, {}, {});
-    assert.equal(lines[2][0].tag, 'text');
-    assert.match(lines[2][0].text, /@csmht/);
-  } finally {
-    console.log = original;
-  }
-  assert.ok(warnings.some((w) => w.includes('::warning::') && w.includes('csmht')));
+test('review: mention on + unmapped reviewer throws, never degrades', () => {
+  const event = parseOrThrow(reviewRequestedEventSchema, baseEvent, 'event');
+  assert.throws(() => assembleReviewRequest(event, {}, {}, true), /enable-mention is on.*csmht.*missing/);
+});
+
+test('review: mention off renders no at element even with mapping', () => {
+  const event = parseOrThrow(reviewRequestedEventSchema, baseEvent, 'event');
+  const { lines } = assembleReviewRequest(event, { csmht: OPEN_ID }, {}, false);
+  assert.ok(!lines.flat().some((el) => el.tag === 'at'));
 });
 
 test('review: team request renders team line', () => {
@@ -140,7 +135,7 @@ test('review: team request renders team line', () => {
     pull_request: baseEvent.pull_request,
   };
   const event = parseOrThrow(reviewRequestedEventSchema, teamEvent, 'event');
-  const { lines } = assembleReviewRequest(event, {}, {});
+  const { lines } = assembleReviewRequest(event, {}, {}, true);
   assert.match(lines[2][0].text, /backend/);
 });
 
@@ -150,6 +145,7 @@ test('review: user templates override defaults', () => {
     event,
     { csmht: OPEN_ID },
     { title: '[评审] PR #{{pr.number}} by {{author}}', message: '{{mention}} 看下 {{pr.anchor}}' },
+    true,
   );
   assert.equal(title, '[评审] PR #38 by z-ph');
   assert.equal(lines.length, 1);

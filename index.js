@@ -22,6 +22,7 @@ function readInputs() {
       message: process.env.INPUT_MESSAGE || '',
       link: process.env.INPUT_LINK || '',
       reviewerMap: rawMap,
+      enableMention: process.env['INPUT_ENABLE-MENTION'],
       titleTemplate: process.env['INPUT_TITLE-TEMPLATE'] || '',
       messageTemplate: process.env['INPUT_MESSAGE-TEMPLATE'] || '',
     },
@@ -43,10 +44,12 @@ function readEvent() {
   if (event.action === 'review_requested') {
     // review_requested 只走模板组装,title/message/link 输入在此模式下无意义。
     const reviewEvent = parseOrThrow(reviewRequestedEventSchema, event, 'review_requested event');
-    const review = assembleReviewRequest(reviewEvent, inputs.reviewerMap, {
-      title: inputs.titleTemplate,
-      message: inputs.messageTemplate,
-    });
+    const review = assembleReviewRequest(
+      reviewEvent,
+      inputs.reviewerMap,
+      { title: inputs.titleTemplate, message: inputs.messageTemplate },
+      inputs.enableMention,
+    );
     title = review.title;
     content = review.lines;
   } else {

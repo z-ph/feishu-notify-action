@@ -13,22 +13,27 @@ const DEFAULT_MESSAGE_TEMPLATE = [
   '{{mention}} 请抽空评审，谢谢',
 ].join('\n');
 
-function assembleReviewRequest(event, reviewerMap, templates) {
+function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
   const pr = event.pull_request;
   const reviewer = event.requested_reviewer;
   const team = event.requested_team;
   const author = pr.user.login;
   const prAnchor = `PR #${pr.number}`;
 
-  // mention：命中映射 → at 元素；未命中 → 文本降级 + 显式 warning；团队 → 团队名文本。
+  // mention 语义（无降级）：
+  // - enable-mention=false → 空元素,卡片不出现 @;
+  // - enable-mention=true → reviewer 必须在 reviewer-map 中,缺失即抛错;
+  // - 团队评审 → 团队名文本(团队无法被 @,仅作信息展示)。
   const mention = () => {
-    if (reviewer) {
-      const openId = reviewerMap[reviewer.login.toLowerCase()];
-      if (openId) return [{ tag: 'at', user_id: openId, user_name: reviewer.login }];
-      console.log(`::warning::reviewer "${reviewer.login}" is not in reviewer-map, mention degraded to plain text`);
-      return [{ tag: 'text', text: `@${reviewer.login}` }];
+    if (team) return [{ tag: 'text', text: `团队 ${team.slug || team.name}` }];
+    if (!enableMention) return [];
+    const openId = reviewerMap[reviewer.login.toLowerCase()];
+    if (!openId) {
+      throw new Error(
+        `enable-mention is on but reviewer "${reviewer.login}" is missing from reviewer-map — add the mapping or turn enable-mention off`,
+      );
     }
-    return [{ tag: 'text', text: `团队 ${team.slug || team.name}` }];
+    return [{ tag: 'at', user_id: openId, user_name: reviewer.login }];
   };
 
   const stringVars = {

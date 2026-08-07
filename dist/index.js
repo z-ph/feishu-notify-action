@@ -20,22 +20,27 @@ const DEFAULT_MESSAGE_TEMPLATE = [
   '{{mention}} 请抽空评审，谢谢',
 ].join('\n');
 
-function assembleReviewRequest(event, reviewerMap, templates) {
+function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
   const pr = event.pull_request;
   const reviewer = event.requested_reviewer;
   const team = event.requested_team;
   const author = pr.user.login;
   const prAnchor = `PR #${pr.number}`;
 
-  // mention：命中映射 → at 元素；未命中 → 文本降级 + 显式 warning；团队 → 团队名文本。
+  // mention 语义（无降级）：
+  // - enable-mention=false → 空元素,卡片不出现 @;
+  // - enable-mention=true → reviewer 必须在 reviewer-map 中,缺失即抛错;
+  // - 团队评审 → 团队名文本(团队无法被 @,仅作信息展示)。
   const mention = () => {
-    if (reviewer) {
-      const openId = reviewerMap[reviewer.login.toLowerCase()];
-      if (openId) return [{ tag: 'at', user_id: openId, user_name: reviewer.login }];
-      console.log(`::warning::reviewer "${reviewer.login}" is not in reviewer-map, mention degraded to plain text`);
-      return [{ tag: 'text', text: `@${reviewer.login}` }];
+    if (team) return [{ tag: 'text', text: `团队 ${team.slug || team.name}` }];
+    if (!enableMention) return [];
+    const openId = reviewerMap[reviewer.login.toLowerCase()];
+    if (!openId) {
+      throw new Error(
+        `enable-mention is on but reviewer "${reviewer.login}" is missing from reviewer-map — add the mapping or turn enable-mention off`,
+      );
     }
-    return [{ tag: 'text', text: `团队 ${team.slug || team.name}` }];
+    return [{ tag: 'at', user_id: openId, user_name: reviewer.login }];
   };
 
   const stringVars = {
@@ -222,6 +227,10 @@ const inputsSchema = z.object({
   message: z.string().default(''),
   link: z.string().default(''),
   reviewerMap: z.record(z.string().min(1, 'empty GitHub login'), openId).default({}),
+  enableMention: z
+    .enum(['true', 'false'], { message: 'must be the string "true" or "false"' })
+    .default('false')
+    .transform((v) => v === 'true'),
   titleTemplate: z.string().default(''),
   messageTemplate: z.string().default(''),
 });
@@ -4806,6 +4815,7 @@ function readInputs() {
       message: process.env.INPUT_MESSAGE || '',
       link: process.env.INPUT_LINK || '',
       reviewerMap: rawMap,
+      enableMention: process.env['INPUT_ENABLE-MENTION'],
       titleTemplate: process.env['INPUT_TITLE-TEMPLATE'] || '',
       messageTemplate: process.env['INPUT_MESSAGE-TEMPLATE'] || '',
     },
@@ -4827,10 +4837,12 @@ function readEvent() {
   if (event.action === 'review_requested') {
     // review_requested 只走模板组装,title/message/link 输入在此模式下无意义。
     const reviewEvent = parseOrThrow(reviewRequestedEventSchema, event, 'review_requested event');
-    const review = assembleReviewRequest(reviewEvent, inputs.reviewerMap, {
-      title: inputs.titleTemplate,
-      message: inputs.messageTemplate,
-    });
+    const review = assembleReviewRequest(
+      reviewEvent,
+      inputs.reviewerMap,
+      { title: inputs.titleTemplate, message: inputs.messageTemplate },
+      inputs.enableMention,
+    );
     title = review.title;
     content = review.lines;
   } else {
