@@ -3,7 +3,17 @@ const { createHmac } = require('node:crypto');
 (async () => {
   const webhook = process.env.INPUT_WEBHOOK;
   const secret = process.env.INPUT_SECRET || '';
-  const payload = JSON.parse(process.env.INPUT_PAYLOAD);
+  const title = process.env.INPUT_TITLE || '';
+  const message = process.env.INPUT_MESSAGE || '';
+  const link = process.env.INPUT_LINK || '';
+
+  const content = message
+    ? message.split('\n').filter((line) => line.trim()).map((line) => [{ tag: 'text', text: line }])
+    : [];
+  if (link) content.push([{ tag: 'a', text: '查看详情', href: link }]);
+
+  const payload = { msg_type: 'post', content: { post: { zh_cn: { content } } } };
+  if (title) payload.content.post.zh_cn.title = title;
 
   if (secret) {
     const timestamp = String(Math.floor(Date.now() / 1000));

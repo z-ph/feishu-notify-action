@@ -1,5 +1,5 @@
-name: 'Feishu Webhook Notify'
-description: 'Send a message to a Feishu custom bot webhook'
+name: 'Feishu Notify'
+description: 'Post a rich-text message to a Feishu custom bot webhook'
 inputs:
   webhook:
     description: 'Feishu custom bot webhook URL'
@@ -7,9 +7,15 @@ inputs:
   secret:
     description: 'Bot sign secret, when signature verification is enabled'
     required: false
-  payload:
-    description: 'JSON message body, e.g. {"msg_type":"text","content":{"text":"hi"}}'
-    required: true
+  title:
+    description: 'Optional rich-text title'
+    required: false
+  message:
+    description: 'Optional rich-text body, one line per paragraph'
+    required: false
+  link:
+    description: 'Optional URL appended as a "查看详情" hyperlink'
+    required: false
 runs:
   using: 'node20'
   main: 'index.js'
