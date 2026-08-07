@@ -1,0 +1,17 @@
+{
+  "name": "feishu-notify-action",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Post rich-text messages and review-request mentions to a Feishu custom bot webhook",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build index.js -o dist",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.1"
+  }
+}

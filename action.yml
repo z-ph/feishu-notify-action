@@ -19,9 +19,15 @@ inputs:
   reviewer-map:
     description: 'YAML map of GitHub login to Feishu open_id (ou_...), used to @ the reviewer on pull_request review_requested events'
     required: false
+  title-template:
+    description: 'Title template for review_requested events, variables: {{pr.number}} {{pr.title}} {{pr.url}} {{author}} {{reviewer}} {{team}}'
+    required: false
+  message-template:
+    description: 'Body template for review_requested events, one line per paragraph; extra element tokens: {{pr.anchor}} (PR link) and {{mention}} (@ reviewer)'
+    required: false
 runs:
   using: 'node20'
-  main: 'index.js'
+  main: 'dist/index.js'
 branding:
   icon: 'send'
   color: 'blue'
