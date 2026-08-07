@@ -2,6 +2,10 @@ const { createHmac } = require('node:crypto');
 
 (async () => {
   const webhook = process.env.INPUT_WEBHOOK;
+  if (!webhook) {
+    console.log('No webhook configured, skipping');
+    return;
+  }
   const secret = process.env.INPUT_SECRET || '';
   const title = process.env.INPUT_TITLE || '';
   const message = process.env.INPUT_MESSAGE || '';
