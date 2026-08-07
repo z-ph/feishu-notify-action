@@ -57,14 +57,46 @@ function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
   };
 }
 
+// 解析 GitHub 上传图片的 <img> 标签，转为飞书超链接元素。
+// 飞书自定义机器人 webhook 不支持直接用 URL 显示图片（需要 image_key + 上传 API），
+// 降级为「📷 图片」超链接，点击跳转到图片地址。
+// 一个 <img> 标签生成一个独立段落（飞书 post 中 a 元素可以和 text 混排，
+// 但图片链接单独成段更清晰）。
+const IMG_TAG_RE = /<img\s+[^>]*?src=["']([^"']+)["'][^>]*?\/?>/gi;
+
+function parseImgTags(text) {
+  const matches = [...text.matchAll(IMG_TAG_RE)];
+  if (matches.length === 0) return [];
+  const elements = [];
+  let last = 0;
+  for (const match of matches) {
+    // 标签前的文本（非空才入段）
+    if (match.index > last && text.slice(last, match.index).trim()) {
+      elements.push({ tag: 'text', text: text.slice(last, match.index).trim() });
+    }
+    elements.push({ tag: 'a', text: '📷 图片', href: match[1] });
+    last = match.index + match[0].length;
+  }
+  // 标签后的尾部文本
+  if (last < text.length && text.slice(last).trim()) {
+    elements.push({ tag: 'text', text: text.slice(last).trim() });
+  }
+  return elements;
+}
+
 // 通用路径：显式 message 一行一段，link 追加为 "查看详情" 超链接。
+// message 中的 <img> 标签被解析为「📷 图片」超链接元素（飞书不支持 URL 直显图片）。
 function assembleGenericMessage(message, link) {
   const lines = message
     .split('\n')
-    .filter((line) => line.trim())
-    .map((line) => [{ tag: 'text', text: line }]);
+    .map((line) => {
+      if (!line.trim()) return null;
+      const els = parseImgTags(line);
+      return els.length > 0 ? els : [{ tag: 'text', text: line }];
+    })
+    .filter(Boolean);
   if (link) lines.push([{ tag: 'a', text: '查看详情', href: link }]);
   return lines;
 }
 
-module.exports = { assembleReviewRequest, assembleGenericMessage };
+module.exports = { assembleReviewRequest, assembleGenericMessage, parseImgTags };

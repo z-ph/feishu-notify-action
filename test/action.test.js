@@ -157,3 +157,56 @@ test('generic: message lines plus detail link', () => {
   assert.equal(lines.length, 3);
   assert.deepEqual(lines[2], [{ tag: 'a', text: '查看详情', href: 'https://x/1' }]);
 });
+
+// ---- assemble: img tag parsing ----
+
+const { parseImgTags } = require('../src/assemble/reviewRequest');
+
+const GH_IMG = '<img width="2828" height="1496" alt="Image" src="https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8" />';
+
+test('img: single <img> tag becomes link element', () => {
+  const els = parseImgTags(GH_IMG);
+  assert.equal(els.length, 1);
+  assert.deepEqual(els[0], { tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' });
+});
+
+test('img: text before <img> tag is preserved', () => {
+  const els = parseImgTags(`看看这个截图 ${GH_IMG}`);
+  assert.equal(els.length, 2);
+  assert.deepEqual(els[0], { tag: 'text', text: '看看这个截图' });
+  assert.deepEqual(els[1], { tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' });
+});
+
+test('img: multiple <img> tags in one line', () => {
+  const els = parseImgTags(`${GH_IMG} 和 ${GH_IMG}`);
+  assert.equal(els.length, 3);
+  assert.deepEqual(els[0], { tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' });
+  assert.deepEqual(els[1], { tag: 'text', text: '和' });
+  assert.deepEqual(els[2], { tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' });
+});
+
+test('img: line without <img> tag returns empty array', () => {
+  assert.deepEqual(parseImgTags('普通文本'), []);
+  assert.deepEqual(parseImgTags(''), []);
+});
+
+test('img: assembleGenericMessage with <img> produces link paragraph', () => {
+  const lines = assembleGenericMessage(`评论内容\n${GH_IMG}`, 'https://x/1');
+  assert.equal(lines.length, 3);
+  assert.deepEqual(lines[0], [{ tag: 'text', text: '评论内容' }]);
+  assert.deepEqual(lines[1], [{ tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' }]);
+  assert.deepEqual(lines[2], [{ tag: 'a', text: '查看详情', href: 'https://x/1' }]);
+  // 组装结果必须能通过输出校验
+  parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { content: lines } } } }, 'payload');
+});
+
+test('img: single-quoted src attribute also parsed', () => {
+  const els = parseImgTags(`<img src='https://example.com/img.png' alt='pic' />`);
+  assert.equal(els.length, 1);
+  assert.deepEqual(els[0], { tag: 'a', text: '📷 图片', href: 'https://example.com/img.png' });
+});
+
+test('img: <img> without src is left as text, not parsed', () => {
+  const els = parseImgTags('<img alt="no src" />');
+  assert.equal(els.length, 0);
+});
