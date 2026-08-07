@@ -1,21 +1,71 @@
 const { createHmac } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 
+const OPEN_ID_RE = /^ou_[0-9a-f]{32}$/;
+const WEBHOOK_RE = /^https:\/\/(open\.feishu\.cn|open\.larksuite\.com)\/open-apis\/bot\/v2\/hook\/.+/;
+
+function requireInput(name, envName) {
+  const value = process.env[envName];
+  if (!value || !value.trim()) {
+    throw new Error(`input "${name}" is required but empty (env ${envName} unset)`);
+  }
+  return value;
+}
+
 // Minimal flat YAML "key: value" parser — enough for the reviewer map,
 // avoids pulling js-yaml into a dependency-free action.
+// Malformed lines and invalid open_ids are config errors: throw, never skip.
 function parseReviewerMap(src) {
   const map = {};
-  for (const rawLine of src.split('\n')) {
+  if (!src || !src.trim()) return map;
+  src.split('\n').forEach((rawLine, i) => {
     const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
+    if (!line || line.startsWith('#')) return;
     const idx = line.indexOf(':');
-    if (idx === -1) continue;
-    const key = line.slice(0, idx).trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+    if (idx === -1) {
+      throw new Error(`reviewer-map line ${i + 1} is not "login: open_id": ${line}`);
+    }
+    const login = line.slice(0, idx).trim().replace(/^['"]|['"]$/g, '').toLowerCase();
     // Strip quotes and trailing " # comment" (whitespace before #, per YAML).
-    const value = line.slice(idx + 1).replace(/\s+#.*$/, '').trim().replace(/^['"]|['"]$/g, '');
-    if (key && value) map[key] = value;
-  }
+    const openId = line.slice(idx + 1).replace(/\s+#.*$/, '').trim().replace(/^['"]|['"]$/g, '');
+    if (!login) throw new Error(`reviewer-map line ${i + 1}: empty GitHub login`);
+    if (!OPEN_ID_RE.test(openId)) {
+      throw new Error(`reviewer-map line ${i + 1}: "${openId}" is not a valid Feishu open_id (ou_ + 32 hex chars)`);
+    }
+    map[login] = openId;
+  });
   return map;
+}
+
+// Structural validation of the outgoing post payload: every element must be
+// a fully-formed tag Feishu can render. Throws on any violation.
+function validatePayload(payload) {
+  if (payload.msg_type !== 'post') throw new Error(`payload: unexpected msg_type "${payload.msg_type}"`);
+  const post = payload.content && payload.content.post && payload.content.post.zh_cn;
+  if (!post) throw new Error('payload: content.post.zh_cn missing');
+  if (!Array.isArray(post.content) || post.content.length === 0) {
+    throw new Error('payload: message content is empty (nothing to send)');
+  }
+  for (const line of post.content) {
+    if (!Array.isArray(line) || line.length === 0) throw new Error('payload: empty content line');
+    for (const el of line) {
+      switch (el.tag) {
+        case 'text':
+          if (!el.text) throw new Error('payload: text element without text');
+          break;
+        case 'a':
+          if (!el.text || !el.href) throw new Error(`payload: link element missing text/href: ${JSON.stringify(el)}`);
+          break;
+        case 'at':
+          if (!OPEN_ID_RE.test(el.user_id) && el.user_id !== 'all') {
+            throw new Error(`payload: at element with invalid user_id "${el.user_id}"`);
+          }
+          break;
+        default:
+          throw new Error(`payload: unsupported element tag "${el.tag}"`);
+      }
+    }
+  }
 }
 
 function messageLines(message) {
@@ -26,13 +76,18 @@ function messageLines(message) {
 // GitHub dispatches one review_requested event per requested reviewer,
 // so we mention only the reviewer this event is about — mentioning the full
 // requested_reviewers list would re-ping everyone on every event.
-// Returns null when the event is not a reviewer assignment.
 function reviewRequestContent(event, reviewerMap) {
-  if (event.action !== 'review_requested' || !event.pull_request) return null;
+  if (event.action !== 'review_requested') return null;
+  if (!event.pull_request) throw new Error('review_requested event without pull_request payload');
   const pr = event.pull_request;
   const reviewer = event.requested_reviewer;
   const team = event.requested_team;
-  if (!reviewer && !team) return null;
+  if (!reviewer && !team) {
+    throw new Error('review_requested event without requested_reviewer/requested_team');
+  }
+  if (!pr.number || !pr.html_url) {
+    throw new Error(`review_requested event with incomplete PR payload: number=${pr.number}, html_url=${pr.html_url}`);
+  }
 
   const lines = [
     [
@@ -44,22 +99,22 @@ function reviewRequestContent(event, reviewerMap) {
 
   if (reviewer) {
     const feishuId = reviewerMap[String(reviewer.login).toLowerCase()];
-    lines.push(
-      feishuId
-        ? [{ tag: 'at', user_id: feishuId, user_name: reviewer.login }, { tag: 'text', text: ' 请抽空评审，谢谢' }]
-        : [{ tag: 'text', text: `请 @${reviewer.login} 抽空评审，谢谢` }],
-    );
+    if (feishuId) {
+      lines.push([{ tag: 'at', user_id: feishuId, user_name: reviewer.login }, { tag: 'text', text: ' 请抽空评审，谢谢' }]);
+    } else {
+      console.log(`::warning::reviewer "${reviewer.login}" is not in reviewer-map, mention degraded to plain text`);
+      lines.push([{ tag: 'text', text: `请 @${reviewer.login} 抽空评审，谢谢` }]);
+    }
   } else {
     lines.push([{ tag: 'text', text: `请团队 ${team.slug || team.name} 抽空评审，谢谢` }]);
   }
-  return { title: `请求代码评审：${pr.title || `PR #${pr.number}`}`, link: pr.html_url || '', lines };
+  return { title: `请求代码评审：${pr.title || `PR #${pr.number}`}`, link: pr.html_url, lines };
 }
 
 (async () => {
-  const webhook = process.env.INPUT_WEBHOOK;
-  if (!webhook) {
-    console.log('No webhook configured, skipping');
-    return;
+  const webhook = requireInput('webhook', 'INPUT_WEBHOOK');
+  if (!WEBHOOK_RE.test(webhook)) {
+    throw new Error(`input "webhook" is not a Feishu custom bot webhook URL: ${webhook}`);
   }
   const secret = process.env.INPUT_SECRET || '';
   let title = process.env.INPUT_TITLE || '';
@@ -67,11 +122,10 @@ function reviewRequestContent(event, reviewerMap) {
   let link = process.env.INPUT_LINK || '';
   // GitHub converts input names to env vars replacing only SPACES:
   // input `reviewer-map` arrives as INPUT_REVIEWER-MAP (dash kept).
-  const reviewerMap = parseReviewerMap(process.env['INPUT_REVIEWER-MAP'] || process.env.INPUT_REVIEWER_MAP || '');
+  const reviewerMap = parseReviewerMap(process.env['INPUT_REVIEWER-MAP']);
 
-  const event = process.env.GITHUB_EVENT_PATH
-    ? JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
-    : {};
+  if (!process.env.GITHUB_EVENT_PATH) throw new Error('GITHUB_EVENT_PATH is not set (not running in Actions?)');
+  const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
 
   let content;
   const review = reviewRequestContent(event, reviewerMap);
@@ -94,6 +148,7 @@ function reviewRequestContent(event, reviewerMap) {
     payload.sign = createHmac('sha256', `${timestamp}\n${secret}`).update('').digest('base64');
   }
 
+  validatePayload(payload);
   console.log('Feishu payload:', JSON.stringify(payload));
   const res = await fetch(webhook, {
     method: 'POST',
@@ -103,4 +158,7 @@ function reviewRequestContent(event, reviewerMap) {
   const body = await res.json();
   console.log('Feishu response:', JSON.stringify(body));
   if (body.code !== 0) throw new Error(`Feishu error: ${JSON.stringify(body)}`);
-})();
+})().catch((err) => {
+  console.error(`::error::${err.message}`);
+  process.exit(1);
+});
