@@ -16,6 +16,9 @@ inputs:
   link:
     description: 'Optional URL appended as a "查看详情" hyperlink'
     required: false
+  reviewer-map:
+    description: 'YAML map of GitHub login to Feishu open_id (ou_...), used to @ the reviewer on pull_request review_requested events'
+    required: false
 runs:
   using: 'node20'
   main: 'index.js'
