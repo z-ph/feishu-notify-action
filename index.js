@@ -65,7 +65,9 @@ function reviewRequestContent(event, reviewerMap) {
   let title = process.env.INPUT_TITLE || '';
   const message = process.env.INPUT_MESSAGE || '';
   let link = process.env.INPUT_LINK || '';
-  const reviewerMap = parseReviewerMap(process.env.INPUT_REVIEWER_MAP || '');
+  // GitHub converts input names to env vars replacing only SPACES:
+  // input `reviewer-map` arrives as INPUT_REVIEWER-MAP (dash kept).
+  const reviewerMap = parseReviewerMap(process.env['INPUT_REVIEWER-MAP'] || process.env.INPUT_REVIEWER_MAP || '');
 
   const event = process.env.GITHUB_EVENT_PATH
     ? JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
