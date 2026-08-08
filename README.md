@@ -15,6 +15,23 @@ Post a rich-text message to a [Feishu (飞书) custom bot](https://open.feishu.c
 | `enable-mention` | no | `'true'` @-mentions the reviewer via `reviewer-map` (missing mapping **fails the step**); default `'false'` sends the card without any mention |
 | `title-template` | no | Title template for `review_requested` events (see variables below) |
 | `message-template` | no | Body template for `review_requested` events, one line per paragraph |
+| `app-id` | no | Feishu app ID for image upload (enables inline image preview). Omit to fall back to image links |
+| `app-secret` | no | Feishu app secret for image upload. Required when `app-id` is set |
+| `github-token` | no | GitHub token to resolve **private-repo** `user-attachments` images via API `body_html` signed URLs. Pass `${{ secrets.GITHUB_TOKEN }}` (needs `issues:read` / `pull-requests:read`). Omit for public repos |
+
+### Images in comments (`<img>` / `user-attachments`)
+
+`message` 中出现 GitHub 粘贴图片（`<img src="https://github.com/user-attachments/assets/...">`）时的行为：
+
+1. 有 `app-id`+`app-secret`：图片经 `tenant_access_token` 上传飞书换 `image_key`，以 `img` 元素内联展示；无飞书应用凭证时降级为「📷 图片」超链接。
+2. **私有仓库**的 `user-attachments` URL 匿名/直连恒 404（`GITHUB_TOKEN` 直访也不行）。此时传 `github-token: ${{ secrets.GITHUB_TOKEN }}`，action 会从事件 JSON 推导 API 对象（comment → review → issue → PR），用 `Accept: application/vnd.github.full+json` 取 `body_html`，按资产 uuid 匹配出带 5 分钟 JWT 签名的 `private-user-images` 直链并立即下载转存。uuid 不在 `body_html` 中（图片属于其他对象）会报错失败，不静默降级。
+3. workflow 需授予 `issues: read` 与 `pull-requests: read` 权限（见下方示例）。
+
+```yaml
+permissions:
+  issues: read
+  pull-requests: read
+```
 
 Two mutually exclusive modes: `review_requested` events are always composed from the templates and event payload (`title` / `message` / `link` are ignored there); every other event uses the explicit `title` / `message` / `link` inputs. GitHub dispatches one `review_requested` event per requested reviewer, so each reviewer is mentioned exactly once. There is no degraded-mention fallback: with `enable-mention: 'true'` an unmapped reviewer is a configuration error and fails loudly.
 
@@ -92,9 +109,9 @@ jobs:
 
 ```
 index.js            入口：读取输入 → 校验 → 组装 → 校验输出 → 发送
-src/tool/           tool 层：飞书 webhook 签名/发送、扁平 YAML 解析
+src/tool/           tool 层：飞书 webhook 签名/发送、飞书图片上传、GitHub 私有图片签名 URL 解析、扁平 YAML 解析
 src/validate/       校验层：输入、事件、payload 的 zod schema
-src/assemble/       装配层：{{token}} 模板引擎、review_requested 卡片组装
+src/assemble/       装配层：{{token}} 模板引擎、review_requested 卡片组装、<img> 标签解析
 ```
 
 Errors never degrade silently: validation failures throw with `::error::` and exit 1.

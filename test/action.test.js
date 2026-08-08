@@ -2,12 +2,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFlatYamlMap } from '../src/tool/flatYaml';
-import { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } from '../src/validate/schemas';
-import { renderString, renderElements } from '../src/assemble/templates';
-import { assembleReviewRequest, assembleGenericMessage } from '../src/assemble/reviewRequest';
-import feishuImage from '../src/tool/feishuImage';
-import { parseImgTags, extractImgUrls } from '../src/assemble/reviewRequest';
+import { parseFlatYamlMap } from '../src/tool/flatYaml.js';
+import { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } from '../src/validate/schemas.js';
+import { renderString, renderElements } from '../src/assemble/templates.js';
+import { assembleReviewRequest, assembleGenericMessage } from '../src/assemble/reviewRequest.js';
+import feishuImage from '../src/tool/feishuImage.js';
+import { parseImgTags, extractImgUrls } from '../src/assemble/reviewRequest.js';
 
 const OPEN_ID = 'ou_6e9bdfd1f3c55ddbf412cd760716ee19';
 const OPEN_ID_2 = 'ou_56071ba27060edd2b688c4d46f86200f';

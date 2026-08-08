@@ -35,6 +35,9 @@ inputs:
   app-secret:
     description: 'Feishu app secret for image upload. Required when app-id is set.'
     required: false
+  github-token:
+    description: 'GitHub token used to resolve private user-attachments images via the API body_html (signed URLs). Pass secrets.GITHUB_TOKEN; needs issues:read / pull-requests:read. Omit to download image URLs directly (public repos only).'
+    required: false
 runs:
   using: 'node20'
   main: 'dist/index.js'

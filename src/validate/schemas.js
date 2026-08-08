@@ -30,6 +30,7 @@ const inputsSchema = z.object({
   messageTemplate: z.string().default(''),
   appId: z.string().default(''),
   appSecret: z.string().default(''),
+  githubToken: z.string().default(''),
 });
 
 // ---- GitHub 事件（只约束用到的字段，其余透传）----
@@ -93,4 +94,4 @@ function parseOrThrow(schema, data, what) {
   return result.data;
 }
 
-module.exports = { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow };
+export { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow };

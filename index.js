@@ -1,11 +1,12 @@
 'use strict';
 
 import { readFileSync } from 'node:fs';
-import { parseFlatYamlMap } from './src/tool/flatYaml';
-import { signPayload, sendToFeishu } from './src/tool/feishu';
-import { getTenantAccessToken } from './src/tool/feishuImage';
-import { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } from './src/validate/schemas';
-import { assembleReviewRequest, assembleGenericMessage } from './src/assemble/reviewRequest';
+import { parseFlatYamlMap } from './src/tool/flatYaml.js';
+import { signPayload, sendToFeishu } from './src/tool/feishu.js';
+import feishuImage from './src/tool/feishuImage.js';
+import { buildImageUrlResolver } from './src/tool/githubImage.js';
+import { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } from './src/validate/schemas.js';
+import { assembleReviewRequest, assembleGenericMessage } from './src/assemble/reviewRequest.js';
 
 // 入口：tool 层读原始输入 → validate 层校验 → assemble 层组装 → validate 层校验输出 → tool 层发送。
 // 校验失败一律抛错（::error:: + exit 1），不做任何静默兜底。
@@ -28,6 +29,7 @@ function readInputs() {
       messageTemplate: process.env['INPUT_MESSAGE-TEMPLATE'] || '',
       appId: process.env['INPUT_APP-ID'] || '',
       appSecret: process.env['INPUT_APP-SECRET'] || '',
+      githubToken: process.env['INPUT_GITHUB-TOKEN'] || '',
     },
     'inputs',
   );
@@ -45,7 +47,7 @@ function readEvent() {
   // 有 app-id + app-secret 时获取 tenant_access_token，用于上传图片。
   let token = '';
   if (inputs.appId && inputs.appSecret) {
-    token = await getTenantAccessToken(inputs.appId, inputs.appSecret);
+    token = await feishuImage.getTenantAccessToken(inputs.appId, inputs.appSecret);
   }
 
   let title;
@@ -62,8 +64,13 @@ function readEvent() {
     title = review.title;
     content = review.lines;
   } else {
+    // 有 github-token 时，message 里的私有仓库 user-attachments 图片
+    // 先经 API body_html 解析为签名直链再下载（直访私有附件恒 404）。
+    const resolveUrl = inputs.githubToken
+      ? buildImageUrlResolver({ event, githubToken: inputs.githubToken })
+      : undefined;
     title = inputs.title;
-    content = await assembleGenericMessage(inputs.message, inputs.link, token);
+    content = await assembleGenericMessage(inputs.message, inputs.link, token, resolveUrl);
   }
 
   const unsigned = { msg_type: 'post', content: { post: { zh_cn: { content } } } };

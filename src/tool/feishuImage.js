@@ -42,10 +42,18 @@ async function uploadImage(token, imageBuffer) {
 async function downloadAndUpload(imageUrl, token) {
   const res = await fetch(imageUrl);
   if (!res.ok) {
-    throw new Error(`Failed to download image ${imageUrl}: HTTP ${res.status}`);
+    // 私有仓库 user-attachments 直访恒 404（匿名与 GITHUB_TOKEN 直访都不行），
+    // 需要 github-token 输入走 API body_html 换签名 URL（见 tool/githubImage）。
+    const hint =
+      res.status === 404 && imageUrl.includes('github.com/user-attachments/')
+        ? ' — private-repo attachments cannot be fetched directly; set the github-token input (github-token: ${{ secrets.GITHUB_TOKEN }}) so the action can resolve a signed URL via the GitHub API'
+        : '';
+    throw new Error(`Failed to download image ${imageUrl}: HTTP ${res.status}${hint}`);
   }
   const buffer = Buffer.from(await res.arrayBuffer());
   return uploadImage(token, buffer);
 }
 
-module.exports = { getTenantAccessToken, uploadImage, downloadAndUpload };
+// 默认导出可变对象：测试可整体替换 downloadAndUpload 做 mock。
+const feishuImage = { getTenantAccessToken, uploadImage, downloadAndUpload };
+export default feishuImage;

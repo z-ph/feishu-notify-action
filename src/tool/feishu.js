@@ -28,4 +28,4 @@ async function sendToFeishu(webhook, payload) {
   return body;
 }
 
-module.exports = { signPayload, sendToFeishu };
+export { signPayload, sendToFeishu };

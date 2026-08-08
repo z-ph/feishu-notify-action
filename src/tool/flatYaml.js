@@ -24,4 +24,4 @@ function parseFlatYamlMap(src, inputName) {
   return map;
 }
 
-module.exports = { parseFlatYamlMap };
+export { parseFlatYamlMap };

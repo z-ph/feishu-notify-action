@@ -38,4 +38,4 @@ function renderElements(template, resolvers) {
     });
 }
 
-module.exports = { renderString, renderElements };
+export { renderString, renderElements };

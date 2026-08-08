@@ -1,7 +1,7 @@
 'use strict';
 
-import { renderString, renderElements } from './templates';
-import feishuImage from '../tool/feishuImage';
+import { renderString, renderElements } from './templates.js';
+import feishuImage from '../tool/feishuImage.js';
 
 // 装配层：把 review_requested 事件 + reviewer 映射 + 用户模板组装成通知内容。
 // GitHub 对每个被指定的 reviewer 分别派发事件，因此只 @ 本事件的那个人——
@@ -71,7 +71,8 @@ function extractImgUrls(text) {
 
 // 异步版：下载图片 -> 上传飞书 -> 返回 img 元素。
 // 无 token 时降级为 a 超链接。
-async function parseImgTags(text, token) {
+// resolveUrl：下载前改写图片 URL（如 user-attachments -> API 签名直链，见 tool/githubImage）。
+async function parseImgTags(text, token, resolveUrl = (url) => url) {
   const matches = [...text.matchAll(IMG_TAG_RE)];
   if (matches.length === 0) return [];
   const elements = [];
@@ -83,7 +84,7 @@ async function parseImgTags(text, token) {
     }
     const url = match[1];
     if (token) {
-      const imageKey = await feishuImage.downloadAndUpload(url, token);
+      const imageKey = await feishuImage.downloadAndUpload(await resolveUrl(url), token);
       elements.push({ tag: 'img', image_key: imageKey });
     } else {
       elements.push({ tag: 'a', text: '📷 图片', href: url });
@@ -99,13 +100,14 @@ async function parseImgTags(text, token) {
 
 // 通用路径：显式 message 一行一段，link 追加为 "查看详情" 超链接。
 // message 中的 <img> 标签被解析为飞书 img 元素（需 token）或超链接（无 token 降级）。
-async function assembleGenericMessage(message, link, token) {
+// resolveUrl 透传给 parseImgTags，用于私有仓库图片的签名 URL 解析。
+async function assembleGenericMessage(message, link, token, resolveUrl) {
   const lines = await Promise.all(
     message
       .split('\n')
       .map(async (line) => {
         if (!line.trim()) return null;
-        const els = await parseImgTags(line, token);
+        const els = await parseImgTags(line, token, resolveUrl);
         return els.length > 0 ? els : [{ tag: 'text', text: line }];
       }),
   );
@@ -114,4 +116,4 @@ async function assembleGenericMessage(message, link, token) {
   return filtered;
 }
 
-module.exports = { assembleReviewRequest, assembleGenericMessage, parseImgTags, extractImgUrls };
+export { assembleReviewRequest, assembleGenericMessage, parseImgTags, extractImgUrls };
