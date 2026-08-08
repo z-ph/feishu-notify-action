@@ -1,7 +1,6 @@
 'use strict';
 
-const { createHmac } = require('node:crypto');
-
+import { createHmac } from 'crypto';
 // Tool 层：飞书自定义机器人 webhook 通信。
 
 // 官方签名算法：HMAC-SHA256，key 为 `${timestamp}\n${secret}`，对空串签名后 base64。

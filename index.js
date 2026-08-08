@@ -1,11 +1,11 @@
 'use strict';
 
-const { readFileSync } = require('node:fs');
-const { parseFlatYamlMap } = require('./src/tool/flatYaml');
-const { signPayload, sendToFeishu } = require('./src/tool/feishu');
-const { getTenantAccessToken } = require('./src/tool/feishuImage');
-const { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } = require('./src/validate/schemas');
-const { assembleReviewRequest, assembleGenericMessage } = require('./src/assemble/reviewRequest');
+import { readFileSync } from 'node:fs';
+import { parseFlatYamlMap } from './src/tool/flatYaml';
+import { signPayload, sendToFeishu } from './src/tool/feishu';
+import { getTenantAccessToken } from './src/tool/feishuImage';
+import { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } from './src/validate/schemas';
+import { assembleReviewRequest, assembleGenericMessage } from './src/assemble/reviewRequest';
 
 // 入口：tool 层读原始输入 → validate 层校验 → assemble 层组装 → validate 层校验输出 → tool 层发送。
 // 校验失败一律抛错（::error:: + exit 1），不做任何静默兜底。

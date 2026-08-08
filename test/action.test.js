@@ -1,11 +1,13 @@
 'use strict';
 
-const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { parseFlatYamlMap } = require('../src/tool/flatYaml');
-const { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } = require('../src/validate/schemas');
-const { renderString, renderElements } = require('../src/assemble/templates');
-const { assembleReviewRequest, assembleGenericMessage } = require('../src/assemble/reviewRequest');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parseFlatYamlMap } from '../src/tool/flatYaml';
+import { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } from '../src/validate/schemas';
+import { renderString, renderElements } from '../src/assemble/templates';
+import { assembleReviewRequest, assembleGenericMessage } from '../src/assemble/reviewRequest';
+import feishuImage from '../src/tool/feishuImage';
+import { parseImgTags, extractImgUrls } from '../src/assemble/reviewRequest';
 
 const OPEN_ID = 'ou_6e9bdfd1f3c55ddbf412cd760716ee19';
 const OPEN_ID_2 = 'ou_56071ba27060edd2b688c4d46f86200f';
@@ -160,7 +162,6 @@ test('generic: message lines plus detail link', async () => {
 
 // ---- assemble: img tag parsing ----
 
-const { parseImgTags, extractImgUrls } = require('../src/assemble/reviewRequest');
 
 const GH_IMG = '<img width="2828" height="1496" alt="Image" src="https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8" />';
 const GH_IMG_URL = 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8';
@@ -214,7 +215,6 @@ test('img: <img> without src returns empty (not parsed)', async () => {
 
 // 有 token 时上传图片，返回 img 元素
 // 用 mock 替换 downloadAndUpload，避免真实网络请求
-const feishuImage = require('../src/tool/feishuImage');
 const origDownloadAndUpload = feishuImage.downloadAndUpload;
 
 function mockDownloadAndUpload(imageKey) {

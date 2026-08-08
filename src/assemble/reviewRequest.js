@@ -1,7 +1,7 @@
 'use strict';
 
-const { renderString, renderElements } = require('./templates');
-const feishuImage = require('../tool/feishuImage');
+import { renderString, renderElements } from './templates';
+import feishuImage from '../tool/feishuImage';
 
 // 装配层：把 review_requested 事件 + reviewer 映射 + 用户模板组装成通知内容。
 // GitHub 对每个被指定的 reviewer 分别派发事件，因此只 @ 本事件的那个人——

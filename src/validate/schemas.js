@@ -1,6 +1,6 @@
 'use strict';
 
-const { z } = require('zod');
+import { z } from 'zod';
 
 // 校验层：全部输入/输出的 zod schema。
 // 每层入口只做 zod parse，失败即抛（ZodError 由入口格式化为 ::error::）。
