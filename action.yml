@@ -29,6 +29,12 @@ inputs:
   message-template:
     description: 'Body template for review_requested events, one line per paragraph; extra element tokens: {{pr.anchor}} (PR link) and {{mention}} (@ reviewer)'
     required: false
+  app-id:
+    description: 'Feishu app ID for image upload (enables inline image preview). Omit to fall back to image links.'
+    required: false
+  app-secret:
+    description: 'Feishu app secret for image upload. Required when app-id is set.'
+    required: false
 runs:
   using: 'node20'
   main: 'dist/index.js'

@@ -28,6 +28,8 @@ const inputsSchema = z.object({
     .transform((v) => v === 'true'),
   titleTemplate: z.string().default(''),
   messageTemplate: z.string().default(''),
+  appId: z.string().default(''),
+  appSecret: z.string().default(''),
 });
 
 // ---- GitHub 事件（只约束用到的字段，其余透传）----
@@ -62,6 +64,7 @@ const elementSchema = z.discriminatedUnion('tag', [
   z.object({ tag: z.literal('text'), text: z.string().min(1) }),
   z.object({ tag: z.literal('a'), text: z.string().min(1), href: z.string().url() }),
   z.object({ tag: z.literal('at'), user_id: z.union([openId, z.literal('all')]), user_name: z.string().optional() }),
+  z.object({ tag: z.literal('img'), image_key: z.string().min(1) }),
 ]);
 
 const payloadSchema = z

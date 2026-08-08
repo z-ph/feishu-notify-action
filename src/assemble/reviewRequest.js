@@ -1,6 +1,7 @@
 'use strict';
 
 const { renderString, renderElements } = require('./templates');
+const feishuImage = require('../tool/feishuImage');
 
 // 装配层：把 review_requested 事件 + reviewer 映射 + 用户模板组装成通知内容。
 // GitHub 对每个被指定的 reviewer 分别派发事件，因此只 @ 本事件的那个人——
@@ -57,14 +58,20 @@ function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
   };
 }
 
-// 解析 GitHub 上传图片的 <img> 标签，转为飞书超链接元素。
-// 飞书自定义机器人 webhook 不支持直接用 URL 显示图片（需要 image_key + 上传 API），
-// 降级为「📷 图片」超链接，点击跳转到图片地址。
-// 一个 <img> 标签生成一个独立段落（飞书 post 中 a 元素可以和 text 混排，
-// 但图片链接单独成段更清晰）。
+// 解析 GitHub 上传图片的 <img> 标签，下载图片并上传飞书，返回 img 元素。
+// 飞书 webhook post 的 img 元素需要 image_key（先上传图片到飞书服务器）。
+// 没有 app-id/app-secret 时，降级为「📷 图片」超链接（点击跳转原图）。
+// 一个 <img> 标签生成一个独立段落。
 const IMG_TAG_RE = /<img\s+[^>]*?src=["']([^"']+)["'][^>]*?\/?>/gi;
 
-function parseImgTags(text) {
+// 提取 <img> 标签中的图片 URL 列表。
+function extractImgUrls(text) {
+  return [...text.matchAll(IMG_TAG_RE)].map((m) => m[1]);
+}
+
+// 异步版：下载图片 -> 上传飞书 -> 返回 img 元素。
+// 无 token 时降级为 a 超链接。
+async function parseImgTags(text, token) {
   const matches = [...text.matchAll(IMG_TAG_RE)];
   if (matches.length === 0) return [];
   const elements = [];
@@ -74,7 +81,13 @@ function parseImgTags(text) {
     if (match.index > last && text.slice(last, match.index).trim()) {
       elements.push({ tag: 'text', text: text.slice(last, match.index).trim() });
     }
-    elements.push({ tag: 'a', text: '📷 图片', href: match[1] });
+    const url = match[1];
+    if (token) {
+      const imageKey = await feishuImage.downloadAndUpload(url, token);
+      elements.push({ tag: 'img', image_key: imageKey });
+    } else {
+      elements.push({ tag: 'a', text: '📷 图片', href: url });
+    }
     last = match.index + match[0].length;
   }
   // 标签后的尾部文本
@@ -85,18 +98,20 @@ function parseImgTags(text) {
 }
 
 // 通用路径：显式 message 一行一段，link 追加为 "查看详情" 超链接。
-// message 中的 <img> 标签被解析为「📷 图片」超链接元素（飞书不支持 URL 直显图片）。
-function assembleGenericMessage(message, link) {
-  const lines = message
-    .split('\n')
-    .map((line) => {
-      if (!line.trim()) return null;
-      const els = parseImgTags(line);
-      return els.length > 0 ? els : [{ tag: 'text', text: line }];
-    })
-    .filter(Boolean);
-  if (link) lines.push([{ tag: 'a', text: '查看详情', href: link }]);
-  return lines;
+// message 中的 <img> 标签被解析为飞书 img 元素（需 token）或超链接（无 token 降级）。
+async function assembleGenericMessage(message, link, token) {
+  const lines = await Promise.all(
+    message
+      .split('\n')
+      .map(async (line) => {
+        if (!line.trim()) return null;
+        const els = await parseImgTags(line, token);
+        return els.length > 0 ? els : [{ tag: 'text', text: line }];
+      }),
+  );
+  const filtered = lines.filter(Boolean);
+  if (link) filtered.push([{ tag: 'a', text: '查看详情', href: link }]);
+  return filtered;
 }
 
-module.exports = { assembleReviewRequest, assembleGenericMessage, parseImgTags };
+module.exports = { assembleReviewRequest, assembleGenericMessage, parseImgTags, extractImgUrls };

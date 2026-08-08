@@ -152,61 +152,136 @@ test('review: user templates override defaults', () => {
   assert.equal(lines[0][0].tag, 'at');
 });
 
-test('generic: message lines plus detail link', () => {
-  const lines = assembleGenericMessage('a\nb', 'https://x/1');
+test('generic: message lines plus detail link', async () => {
+  const lines = await assembleGenericMessage('a\nb', 'https://x/1');
   assert.equal(lines.length, 3);
   assert.deepEqual(lines[2], [{ tag: 'a', text: '查看详情', href: 'https://x/1' }]);
 });
 
 // ---- assemble: img tag parsing ----
 
-const { parseImgTags } = require('../src/assemble/reviewRequest');
+const { parseImgTags, extractImgUrls } = require('../src/assemble/reviewRequest');
 
 const GH_IMG = '<img width="2828" height="1496" alt="Image" src="https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8" />';
+const GH_IMG_URL = 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8';
 
-test('img: single <img> tag becomes link element', () => {
-  const els = parseImgTags(GH_IMG);
+// 无 token 时降级为超链接
+test('img: no token - single <img> becomes link element', async () => {
+  const els = await parseImgTags(GH_IMG);
   assert.equal(els.length, 1);
-  assert.deepEqual(els[0], { tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' });
+  assert.deepEqual(els[0], { tag: 'a', text: '📷 图片', href: GH_IMG_URL });
 });
 
-test('img: text before <img> tag is preserved', () => {
-  const els = parseImgTags(`看看这个截图 ${GH_IMG}`);
+test('img: no token - text before <img> preserved', async () => {
+  const els = await parseImgTags(`看看这个截图 ${GH_IMG}`);
   assert.equal(els.length, 2);
   assert.deepEqual(els[0], { tag: 'text', text: '看看这个截图' });
-  assert.deepEqual(els[1], { tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' });
+  assert.deepEqual(els[1], { tag: 'a', text: '📷 图片', href: GH_IMG_URL });
 });
 
-test('img: multiple <img> tags in one line', () => {
-  const els = parseImgTags(`${GH_IMG} 和 ${GH_IMG}`);
+test('img: no token - multiple <img> tags', async () => {
+  const els = await parseImgTags(`${GH_IMG} 和 ${GH_IMG}`);
   assert.equal(els.length, 3);
-  assert.deepEqual(els[0], { tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' });
+  assert.deepEqual(els[0], { tag: 'a', text: '📷 图片', href: GH_IMG_URL });
   assert.deepEqual(els[1], { tag: 'text', text: '和' });
-  assert.deepEqual(els[2], { tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' });
+  assert.deepEqual(els[2], { tag: 'a', text: '📷 图片', href: GH_IMG_URL });
 });
 
-test('img: line without <img> tag returns empty array', () => {
-  assert.deepEqual(parseImgTags('普通文本'), []);
-  assert.deepEqual(parseImgTags(''), []);
+test('img: no <img> tag returns empty array', async () => {
+  assert.deepEqual(await parseImgTags('普通文本'), []);
+  assert.deepEqual(await parseImgTags(''), []);
 });
 
-test('img: assembleGenericMessage with <img> produces link paragraph', () => {
-  const lines = assembleGenericMessage(`评论内容\n${GH_IMG}`, 'https://x/1');
+test('img: no token - assembleGenericMessage produces link paragraph', async () => {
+  const lines = await assembleGenericMessage(`评论内容\n${GH_IMG}`, 'https://x/1');
   assert.equal(lines.length, 3);
   assert.deepEqual(lines[0], [{ tag: 'text', text: '评论内容' }]);
-  assert.deepEqual(lines[1], [{ tag: 'a', text: '📷 图片', href: 'https://github.com/user-attachments/assets/b83ae07d-7e66-4b7e-bd59-caf54a81d4d8' }]);
+  assert.deepEqual(lines[1], [{ tag: 'a', text: '📷 图片', href: GH_IMG_URL }]);
   assert.deepEqual(lines[2], [{ tag: 'a', text: '查看详情', href: 'https://x/1' }]);
-  // 组装结果必须能通过输出校验
   parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { content: lines } } } }, 'payload');
 });
 
-test('img: single-quoted src attribute also parsed', () => {
-  const els = parseImgTags(`<img src='https://example.com/img.png' alt='pic' />`);
+test('img: single-quoted src attribute also parsed', async () => {
+  const els = await parseImgTags(`<img src='https://example.com/img.png' alt='pic' />`);
   assert.equal(els.length, 1);
   assert.deepEqual(els[0], { tag: 'a', text: '📷 图片', href: 'https://example.com/img.png' });
 });
 
-test('img: <img> without src is left as text, not parsed', () => {
-  const els = parseImgTags('<img alt="no src" />');
+test('img: <img> without src returns empty (not parsed)', async () => {
+  const els = await parseImgTags('<img alt="no src" />');
   assert.equal(els.length, 0);
+});
+
+// 有 token 时上传图片，返回 img 元素
+// 用 mock 替换 downloadAndUpload，避免真实网络请求
+const feishuImage = require('../src/tool/feishuImage');
+const origDownloadAndUpload = feishuImage.downloadAndUpload;
+
+function mockDownloadAndUpload(imageKey) {
+  feishuImage.downloadAndUpload = async (url) => imageKey;
+}
+
+function restoreDownloadAndUpload() {
+  feishuImage.downloadAndUpload = origDownloadAndUpload;
+}
+
+test('img: with token - single <img> becomes img element with image_key', async () => {
+  mockDownloadAndUpload('img_v3_mock_key_001');
+  try {
+    const els = await parseImgTags(GH_IMG, 'fake-token');
+    assert.equal(els.length, 1);
+    assert.deepEqual(els[0], { tag: 'img', image_key: 'img_v3_mock_key_001' });
+  } finally {
+    restoreDownloadAndUpload();
+  }
+});
+
+test('img: with token - text before <img> preserved + img element', async () => {
+  mockDownloadAndUpload('img_v3_mock_key_002');
+  try {
+    const els = await parseImgTags(`看看这个截图 ${GH_IMG}`, 'fake-token');
+    assert.equal(els.length, 2);
+    assert.deepEqual(els[0], { tag: 'text', text: '看看这个截图' });
+    assert.deepEqual(els[1], { tag: 'img', image_key: 'img_v3_mock_key_002' });
+  } finally {
+    restoreDownloadAndUpload();
+  }
+});
+
+test('img: with token - multiple <img> tags each get distinct image_key', async () => {
+  let callCount = 0;
+  feishuImage.downloadAndUpload = async (url) => {
+    callCount++;
+    return `img_v3_mock_key_${callCount}`;
+  };
+  try {
+    const els = await parseImgTags(`${GH_IMG} 和 ${GH_IMG}`, 'fake-token');
+    assert.equal(els.length, 3);
+    assert.deepEqual(els[0], { tag: 'img', image_key: 'img_v3_mock_key_1' });
+    assert.deepEqual(els[1], { tag: 'text', text: '和' });
+    assert.deepEqual(els[2], { tag: 'img', image_key: 'img_v3_mock_key_2' });
+  } finally {
+    restoreDownloadAndUpload();
+  }
+});
+
+test('img: with token - assembleGenericMessage produces img paragraph + passes payload validation', async () => {
+  mockDownloadAndUpload('img_v3_mock_key_003');
+  try {
+    const lines = await assembleGenericMessage(`评论内容\n${GH_IMG}`, 'https://x/1', 'fake-token');
+    assert.equal(lines.length, 3);
+    assert.deepEqual(lines[0], [{ tag: 'text', text: '评论内容' }]);
+    assert.deepEqual(lines[1], [{ tag: 'img', image_key: 'img_v3_mock_key_003' }]);
+    assert.deepEqual(lines[2], [{ tag: 'a', text: '查看详情', href: 'https://x/1' }]);
+    parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { content: lines } } } }, 'payload');
+  } finally {
+    restoreDownloadAndUpload();
+  }
+});
+
+test('img: extractImgUrls returns all src URLs', () => {
+  const urls = extractImgUrls(`${GH_IMG} middle ${GH_IMG}`);
+  assert.equal(urls.length, 2);
+  assert.equal(urls[0], GH_IMG_URL);
+  assert.equal(urls[1], GH_IMG_URL);
 });

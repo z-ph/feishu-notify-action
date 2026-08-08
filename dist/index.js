@@ -8,6 +8,7 @@
 
 
 const { renderString, renderElements } = __nccwpck_require__(937);
+const feishuImage = __nccwpck_require__(883);
 
 // 装配层：把 review_requested 事件 + reviewer 映射 + 用户模板组装成通知内容。
 // GitHub 对每个被指定的 reviewer 分别派发事件，因此只 @ 本事件的那个人——
@@ -64,14 +65,20 @@ function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
   };
 }
 
-// 解析 GitHub 上传图片的 <img> 标签，转为飞书超链接元素。
-// 飞书自定义机器人 webhook 不支持直接用 URL 显示图片（需要 image_key + 上传 API），
-// 降级为「📷 图片」超链接，点击跳转到图片地址。
-// 一个 <img> 标签生成一个独立段落（飞书 post 中 a 元素可以和 text 混排，
-// 但图片链接单独成段更清晰）。
+// 解析 GitHub 上传图片的 <img> 标签，下载图片并上传飞书，返回 img 元素。
+// 飞书 webhook post 的 img 元素需要 image_key（先上传图片到飞书服务器）。
+// 没有 app-id/app-secret 时，降级为「📷 图片」超链接（点击跳转原图）。
+// 一个 <img> 标签生成一个独立段落。
 const IMG_TAG_RE = /<img\s+[^>]*?src=["']([^"']+)["'][^>]*?\/?>/gi;
 
-function parseImgTags(text) {
+// 提取 <img> 标签中的图片 URL 列表。
+function extractImgUrls(text) {
+  return [...text.matchAll(IMG_TAG_RE)].map((m) => m[1]);
+}
+
+// 异步版：下载图片 -> 上传飞书 -> 返回 img 元素。
+// 无 token 时降级为 a 超链接。
+async function parseImgTags(text, token) {
   const matches = [...text.matchAll(IMG_TAG_RE)];
   if (matches.length === 0) return [];
   const elements = [];
@@ -81,7 +88,13 @@ function parseImgTags(text) {
     if (match.index > last && text.slice(last, match.index).trim()) {
       elements.push({ tag: 'text', text: text.slice(last, match.index).trim() });
     }
-    elements.push({ tag: 'a', text: '📷 图片', href: match[1] });
+    const url = match[1];
+    if (token) {
+      const imageKey = await feishuImage.downloadAndUpload(url, token);
+      elements.push({ tag: 'img', image_key: imageKey });
+    } else {
+      elements.push({ tag: 'a', text: '📷 图片', href: url });
+    }
     last = match.index + match[0].length;
   }
   // 标签后的尾部文本
@@ -92,21 +105,23 @@ function parseImgTags(text) {
 }
 
 // 通用路径：显式 message 一行一段，link 追加为 "查看详情" 超链接。
-// message 中的 <img> 标签被解析为「📷 图片」超链接元素（飞书不支持 URL 直显图片）。
-function assembleGenericMessage(message, link) {
-  const lines = message
-    .split('\n')
-    .map((line) => {
-      if (!line.trim()) return null;
-      const els = parseImgTags(line);
-      return els.length > 0 ? els : [{ tag: 'text', text: line }];
-    })
-    .filter(Boolean);
-  if (link) lines.push([{ tag: 'a', text: '查看详情', href: link }]);
-  return lines;
+// message 中的 <img> 标签被解析为飞书 img 元素（需 token）或超链接（无 token 降级）。
+async function assembleGenericMessage(message, link, token) {
+  const lines = await Promise.all(
+    message
+      .split('\n')
+      .map(async (line) => {
+        if (!line.trim()) return null;
+        const els = await parseImgTags(line, token);
+        return els.length > 0 ? els : [{ tag: 'text', text: line }];
+      }),
+  );
+  const filtered = lines.filter(Boolean);
+  if (link) filtered.push([{ tag: 'a', text: '查看详情', href: link }]);
+  return filtered;
 }
 
-module.exports = { assembleReviewRequest, assembleGenericMessage, parseImgTags };
+module.exports = { assembleReviewRequest, assembleGenericMessage, parseImgTags, extractImgUrls };
 
 
 /***/ }),
@@ -198,6 +213,64 @@ module.exports = { signPayload, sendToFeishu };
 
 /***/ }),
 
+/***/ 883:
+/***/ ((module) => {
+
+
+
+// Tool 层：GitHub 图片 URL -> 飞书 image_key。
+// 飞书 webhook 的 post img 元素只接受 image_key，不支持 URL 直显。
+// 流程：下载图片 -> 用 tenant_access_token 上传飞书 -> 返回 image_key。
+
+const TENANT_TOKEN_URL = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal';
+const IMAGE_UPLOAD_URL = 'https://open.feishu.cn/open-apis/im/v1/images';
+
+async function getTenantAccessToken(appId, appSecret) {
+  const res = await fetch(TENANT_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+  });
+  const body = await res.json();
+  if (body.code !== 0) {
+    throw new Error(`Failed to get tenant_access_token: ${JSON.stringify(body)}`);
+  }
+  return body.tenant_access_token;
+}
+
+async function uploadImage(token, imageBuffer) {
+  const form = new FormData();
+  form.append('image_type', 'message');
+  form.append('image', new Blob([imageBuffer]), 'image.png');
+
+  const res = await fetch(IMAGE_UPLOAD_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const body = await res.json();
+  if (body.code !== 0) {
+    throw new Error(`Failed to upload image to Feishu: ${JSON.stringify(body)}`);
+  }
+  return body.data.image_key;
+}
+
+// 下载图片 URL -> 上传飞书 -> 返回 image_key。
+// 下载或上传失败直接抛错，不做兜底。
+async function downloadAndUpload(imageUrl, token) {
+  const res = await fetch(imageUrl);
+  if (!res.ok) {
+    throw new Error(`Failed to download image ${imageUrl}: HTTP ${res.status}`);
+  }
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return uploadImage(token, buffer);
+}
+
+module.exports = { getTenantAccessToken, uploadImage, downloadAndUpload };
+
+
+/***/ }),
+
 /***/ 926:
 /***/ ((module) => {
 
@@ -265,6 +338,8 @@ const inputsSchema = z.object({
     .transform((v) => v === 'true'),
   titleTemplate: z.string().default(''),
   messageTemplate: z.string().default(''),
+  appId: z.string().default(''),
+  appSecret: z.string().default(''),
 });
 
 // ---- GitHub 事件（只约束用到的字段，其余透传）----
@@ -299,6 +374,7 @@ const elementSchema = z.discriminatedUnion('tag', [
   z.object({ tag: z.literal('text'), text: z.string().min(1) }),
   z.object({ tag: z.literal('a'), text: z.string().min(1), href: z.string().url() }),
   z.object({ tag: z.literal('at'), user_id: z.union([openId, z.literal('all')]), user_name: z.string().optional() }),
+  z.object({ tag: z.literal('img'), image_key: z.string().min(1) }),
 ]);
 
 const payloadSchema = z
@@ -4828,6 +4904,7 @@ var __webpack_exports__ = {};
 const { readFileSync } = __nccwpck_require__(24);
 const { parseFlatYamlMap } = __nccwpck_require__(926);
 const { signPayload, sendToFeishu } = __nccwpck_require__(748);
+const { getTenantAccessToken } = __nccwpck_require__(883);
 const { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } = __nccwpck_require__(664);
 const { assembleReviewRequest, assembleGenericMessage } = __nccwpck_require__(763);
 
@@ -4850,6 +4927,8 @@ function readInputs() {
       enableMention: process.env['INPUT_ENABLE-MENTION'],
       titleTemplate: process.env['INPUT_TITLE-TEMPLATE'] || '',
       messageTemplate: process.env['INPUT_MESSAGE-TEMPLATE'] || '',
+      appId: process.env['INPUT_APP-ID'] || '',
+      appSecret: process.env['INPUT_APP-SECRET'] || '',
     },
     'inputs',
   );
@@ -4863,6 +4942,12 @@ function readEvent() {
 (async () => {
   const inputs = readInputs();
   const event = readEvent();
+
+  // 有 app-id + app-secret 时获取 tenant_access_token，用于上传图片。
+  let token = '';
+  if (inputs.appId && inputs.appSecret) {
+    token = await getTenantAccessToken(inputs.appId, inputs.appSecret);
+  }
 
   let title;
   let content;
@@ -4879,7 +4964,7 @@ function readEvent() {
     content = review.lines;
   } else {
     title = inputs.title;
-    content = assembleGenericMessage(inputs.message, inputs.link);
+    content = await assembleGenericMessage(inputs.message, inputs.link, token);
   }
 
   const unsigned = { msg_type: 'post', content: { post: { zh_cn: { content } } } };

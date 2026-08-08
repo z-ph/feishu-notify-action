@@ -3,6 +3,7 @@
 const { readFileSync } = require('node:fs');
 const { parseFlatYamlMap } = require('./src/tool/flatYaml');
 const { signPayload, sendToFeishu } = require('./src/tool/feishu');
+const { getTenantAccessToken } = require('./src/tool/feishuImage');
 const { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } = require('./src/validate/schemas');
 const { assembleReviewRequest, assembleGenericMessage } = require('./src/assemble/reviewRequest');
 
@@ -25,6 +26,8 @@ function readInputs() {
       enableMention: process.env['INPUT_ENABLE-MENTION'],
       titleTemplate: process.env['INPUT_TITLE-TEMPLATE'] || '',
       messageTemplate: process.env['INPUT_MESSAGE-TEMPLATE'] || '',
+      appId: process.env['INPUT_APP-ID'] || '',
+      appSecret: process.env['INPUT_APP-SECRET'] || '',
     },
     'inputs',
   );
@@ -38,6 +41,12 @@ function readEvent() {
 (async () => {
   const inputs = readInputs();
   const event = readEvent();
+
+  // 有 app-id + app-secret 时获取 tenant_access_token，用于上传图片。
+  let token = '';
+  if (inputs.appId && inputs.appSecret) {
+    token = await getTenantAccessToken(inputs.appId, inputs.appSecret);
+  }
 
   let title;
   let content;
@@ -54,7 +63,7 @@ function readEvent() {
     content = review.lines;
   } else {
     title = inputs.title;
-    content = assembleGenericMessage(inputs.message, inputs.link);
+    content = await assembleGenericMessage(inputs.message, inputs.link, token);
   }
 
   const unsigned = { msg_type: 'post', content: { post: { zh_cn: { content } } } };
