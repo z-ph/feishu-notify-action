@@ -4664,17 +4664,51 @@ async function parseImgTags(text, token, resolveUrl = (url) => url) {
   return elements;
 }
 
+// GitHub @login 提及：@ 前不能紧跟词字符/句点/连字符（排除 email 等），login 遵循
+// GitHub 命名规则（字母数字+连字符，连字符不开头/结尾，≤39 字符），后不接 /team
+// （团队提及无法映射到个人，保持纯文本）。
+const MENTION_RE = /(?<![A-Za-z0-9_.-])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)(?!\/[A-Za-z0-9-])/g;
+
+// 把一段纯文本按 @login 提及切成 text/at 元素序列。
+// mentionMap 为 undefined（mention 未启用）时原样返回；
+// 未命中映射的 @login 留在文本里——通用路径解析的是评论正文等用户内容，
+// @ 到未配置的人（bot、外部用户）不是配置错误，不应让通知失败。
+function splitMentionElements(text, mentionMap) {
+  if (!mentionMap) return [{ tag: 'text', text }];
+  const elements = [];
+  let last = 0;
+  const pushText = (end) => {
+    if (end <= last) return;
+    const slice = text.slice(last, end);
+    const prev = elements[elements.length - 1];
+    if (prev && prev.tag === 'text') prev.text += slice;
+    else elements.push({ tag: 'text', text: slice });
+  };
+  for (const match of text.matchAll(MENTION_RE)) {
+    const openId = mentionMap[match[1].toLowerCase()];
+    if (!openId) continue;
+    pushText(match.index);
+    elements.push({ tag: 'at', user_id: openId, user_name: match[1] });
+    last = match.index + match[0].length;
+  }
+  pushText(text.length);
+  return elements;
+}
+
 // 通用路径：显式 message 一行一段，link 追加为 "查看详情" 超链接。
 // message 中的 <img> 标签被解析为飞书 img 元素（需 token）或超链接（无 token 降级）。
 // resolveUrl 透传给 parseImgTags，用于私有仓库图片的签名 URL 解析。
-async function assembleGenericMessage(message, link, token, resolveUrl) {
+// mentionMap（enable-mention 开启时由入口传入）把文本里的 @GitHub登录名
+// 转换为飞书 @ 元素；未命中映射的保持纯文本。
+async function assembleGenericMessage(message, link, token, resolveUrl, mentionMap) {
   const lines = await Promise.all(
     message
       .split('\n')
       .map(async (line) => {
         if (!line.trim()) return null;
         const els = await parseImgTags(line, token, resolveUrl);
-        return els.length > 0 ? els : [{ tag: 'text', text: line }];
+        const base = els.length > 0 ? els : [{ tag: 'text', text: line }];
+        return base.flatMap((el) => (el.tag === 'text' ? splitMentionElements(el.text, mentionMap) : [el]));
       }),
   );
   const filtered = lines.filter(Boolean);
@@ -4751,13 +4785,20 @@ function readEvent() {
     title = review.title;
     content = review.lines;
   } else {
+    // enable-mention 在通用路径的语义：message 里的 @GitHub登录名 经 reviewer-map
+    // 转换为飞书 @ 元素；未命中映射的保持纯文本（评论正文是用户内容，见 assemble 层）。
+    // 但开启 mention 却给空映射是配置错误，直接抛错（与 review_requested 路径一致）。
+    if (inputs.enableMention && Object.keys(inputs.reviewerMap).length === 0) {
+      throw new Error('enable-mention is on but reviewer-map is empty — add mappings or turn enable-mention off');
+    }
+    const mentionMap = inputs.enableMention ? inputs.reviewerMap : undefined;
     // 有 github-token 时，message 里的私有仓库 user-attachments 图片
     // 先经 API body_html 解析为签名直链再下载（直访私有附件恒 404）。
     const resolveUrl = inputs.githubToken
       ? buildImageUrlResolver({ event, githubToken: inputs.githubToken })
       : undefined;
     title = inputs.title;
-    content = await assembleGenericMessage(inputs.message, inputs.link, token, resolveUrl);
+    content = await assembleGenericMessage(inputs.message, inputs.link, token, resolveUrl, mentionMap);
   }
 
   const unsigned = { msg_type: 'post', content: { post: { zh_cn: { content } } } };

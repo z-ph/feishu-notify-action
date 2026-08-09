@@ -64,13 +64,20 @@ function readEvent() {
     title = review.title;
     content = review.lines;
   } else {
+    // enable-mention 在通用路径的语义：message 里的 @GitHub登录名 经 reviewer-map
+    // 转换为飞书 @ 元素；未命中映射的保持纯文本（评论正文是用户内容，见 assemble 层）。
+    // 但开启 mention 却给空映射是配置错误，直接抛错（与 review_requested 路径一致）。
+    if (inputs.enableMention && Object.keys(inputs.reviewerMap).length === 0) {
+      throw new Error('enable-mention is on but reviewer-map is empty — add mappings or turn enable-mention off');
+    }
+    const mentionMap = inputs.enableMention ? inputs.reviewerMap : undefined;
     // 有 github-token 时，message 里的私有仓库 user-attachments 图片
     // 先经 API body_html 解析为签名直链再下载（直访私有附件恒 404）。
     const resolveUrl = inputs.githubToken
       ? buildImageUrlResolver({ event, githubToken: inputs.githubToken })
       : undefined;
     title = inputs.title;
-    content = await assembleGenericMessage(inputs.message, inputs.link, token, resolveUrl);
+    content = await assembleGenericMessage(inputs.message, inputs.link, token, resolveUrl, mentionMap);
   }
 
   const unsigned = { msg_type: 'post', content: { post: { zh_cn: { content } } } };

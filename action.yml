@@ -17,10 +17,10 @@ inputs:
     description: 'URL appended as a "查看详情" hyperlink (non-review_requested events)'
     required: false
   reviewer-map:
-    description: 'YAML map of GitHub login to Feishu open_id (ou_...), used to @ the reviewer on pull_request review_requested events'
+    description: 'YAML map of GitHub login to Feishu open_id (ou_...). On review_requested events it @s the requested reviewer; on other events with enable-mention on, @login mentions in message matching the map (case-insensitive) become Feishu @ elements — unmapped logins stay plain text'
     required: false
   enable-mention:
-    description: "'true' to @ the requested reviewer via reviewer-map; missing mapping then fails the step. 'false' (default) sends the card without any mention"
+    description: "'true' enables @ mentions via reviewer-map: review_requested events @ the requested reviewer (missing mapping fails the step); other events convert mapped @login in message to Feishu @ (unmapped logins stay plain text; an empty reviewer-map fails the step). 'false' (default) sends the card without any mention"
     required: false
     default: 'false'
   title-template:

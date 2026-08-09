@@ -12,7 +12,7 @@ Post a rich-text message to a [Feishu (飞书) custom bot](https://open.feishu.c
 | `message` | no  | Rich-text body, one line per paragraph (non-`review_requested` events) |
 | `link`    | no  | URL appended as a "查看详情" hyperlink (non-`review_requested` events) |
 | `reviewer-map` | no | YAML map of GitHub login → Feishu open_id (`ou_...`), one entry per line, unlimited entries; required when `enable-mention` is on |
-| `enable-mention` | no | `'true'` @-mentions the reviewer via `reviewer-map` (missing mapping **fails the step**); default `'false'` sends the card without any mention |
+| `enable-mention` | no | `'true'` enables @ mentions via `reviewer-map` (see below); default `'false'` sends the card without any mention |
 | `title-template` | no | Title template for `review_requested` events (see variables below) |
 | `message-template` | no | Body template for `review_requested` events, one line per paragraph |
 | `app-id` | no | Feishu app ID for image upload (enables inline image preview). Omit to fall back to image links |
@@ -34,6 +34,30 @@ permissions:
 ```
 
 Two mutually exclusive modes: `review_requested` events are always composed from the templates and event payload (`title` / `message` / `link` are ignored there); every other event uses the explicit `title` / `message` / `link` inputs. GitHub dispatches one `review_requested` event per requested reviewer, so each reviewer is mentioned exactly once. There is no degraded-mention fallback: with `enable-mention: 'true'` an unmapped reviewer is a configuration error and fails loudly.
+
+### @ mentions in `message` (non-`review_requested` events)
+
+With `enable-mention: 'true'` + `reviewer-map`, `@GitHub登录名` in `message` matching the map (case-insensitive) becomes a real Feishu @ — use it to @ the PR author on review results, or to convert @mentions inside comment bodies:
+
+```yaml
+- uses: z-ph/feishu-notify-action@v1
+  with:
+    webhook: ${{ secrets.FEISHU_WEBHOOK_URL }}
+    secret: ${{ secrets.FEISHU_SECRET }}
+    enable-mention: 'true'
+    reviewer-map: ${{ vars.FEISHU_REVIEWER_MAP }}
+    title: "✅ PR #${{ github.event.pull_request.number }} 评审通过"
+    message: |
+      @${{ github.event.review.user.login }} 批准了 ${{ github.event.pull_request.title }}
+      提交人：@${{ github.event.pull_request.user.login }}
+    link: ${{ github.event.review.html_url }}
+```
+
+Semantics differ from `review_requested` on purpose — `message` is user content (comment bodies), not a single explicit target:
+
+- **unmapped** `@login` stays plain text — @ing a bot or an external user must not fail the notification;
+- but `enable-mention: 'true'` with an **empty** `reviewer-map` is a configuration error and fails the step;
+- email-shaped `foo@bar` and team `@org/team` mentions are never converted.
 
 ### Template variables
 
@@ -111,7 +135,7 @@ jobs:
 index.js            入口：读取输入 → 校验 → 组装 → 校验输出 → 发送
 src/tool/           tool 层：飞书 webhook 签名/发送、飞书图片上传、GitHub 私有图片签名 URL 解析、扁平 YAML 解析
 src/validate/       校验层：输入、事件、payload 的 zod schema
-src/assemble/       装配层：{{token}} 模板引擎、review_requested 卡片组装、<img> 标签解析
+src/assemble/       装配层：{{token}} 模板引擎、review_requested 卡片组装、<img> 标签解析、@login 提及切分
 ```
 
 Errors never degrade silently: validation failures throw with `::error::` and exit 1.

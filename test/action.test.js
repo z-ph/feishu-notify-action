@@ -7,7 +7,7 @@ import { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow }
 import { renderString, renderElements } from '../src/assemble/templates.js';
 import { assembleReviewRequest, assembleGenericMessage } from '../src/assemble/reviewRequest.js';
 import feishuImage from '../src/tool/feishuImage.js';
-import { parseImgTags, extractImgUrls } from '../src/assemble/reviewRequest.js';
+import { parseImgTags, extractImgUrls, splitMentionElements } from '../src/assemble/reviewRequest.js';
 
 const OPEN_ID = 'ou_6e9bdfd1f3c55ddbf412cd760716ee19';
 const OPEN_ID_2 = 'ou_56071ba27060edd2b688c4d46f86200f';
@@ -284,4 +284,82 @@ test('img: extractImgUrls returns all src URLs', () => {
   assert.equal(urls.length, 2);
   assert.equal(urls[0], GH_IMG_URL);
   assert.equal(urls[1], GH_IMG_URL);
+});
+
+// ---- assemble: generic-path @mention ----
+
+const MENTION_MAP = { octocat: OPEN_ID, hubot: OPEN_ID_2 };
+
+test('mention: mapped @login becomes at element, CJK prefix preserved', () => {
+  const els = splitMentionElements('提交人：@octocat', MENTION_MAP);
+  assert.deepEqual(els, [
+    { tag: 'text', text: '提交人：' },
+    { tag: 'at', user_id: OPEN_ID, user_name: 'octocat' },
+  ]);
+});
+
+test('mention: unmapped @login stays plain text, merged with surroundings', () => {
+  const els = splitMentionElements('cc @stranger 和 @ghost 看一下', MENTION_MAP);
+  assert.deepEqual(els, [{ tag: 'text', text: 'cc @stranger 和 @ghost 看一下' }]);
+});
+
+test('mention: undefined map (mention disabled) returns original text untouched', () => {
+  const els = splitMentionElements('提交人：@octocat', undefined);
+  assert.deepEqual(els, [{ tag: 'text', text: '提交人：@octocat' }]);
+});
+
+test('mention: email-like foo@bar is not treated as a mention', () => {
+  const els = splitMentionElements('联系 foo@hubot.com 咨询', MENTION_MAP);
+  assert.deepEqual(els, [{ tag: 'text', text: '联系 foo@hubot.com 咨询' }]);
+});
+
+test('mention: @org/team team mention stays literal', () => {
+  const els = splitMentionElements('@octocat/team 看一下', MENTION_MAP);
+  assert.deepEqual(els, [{ tag: 'text', text: '@octocat/team 看一下' }]);
+});
+
+test('mention: multiple mentions in one line, lookup case-insensitive', () => {
+  const els = splitMentionElements('@OctoCat 和 @hubot', MENTION_MAP);
+  assert.deepEqual(els, [
+    { tag: 'at', user_id: OPEN_ID, user_name: 'OctoCat' },
+    { tag: 'text', text: ' 和 ' },
+    { tag: 'at', user_id: OPEN_ID_2, user_name: 'hubot' },
+  ]);
+});
+
+test('mention: trailing punctuation not swallowed into login', () => {
+  const els = splitMentionElements('@octocat, 请看', MENTION_MAP);
+  assert.deepEqual(els, [
+    { tag: 'at', user_id: OPEN_ID, user_name: 'octocat' },
+    { tag: 'text', text: ', 请看' },
+  ]);
+});
+
+test('mention: assembleGenericMessage converts body @mentions + passes payload validation', async () => {
+  const lines = await assembleGenericMessage(
+    '@reviewer 评论：\n@octocat 看一下这个改动\ncc @stranger',
+    'https://x/1',
+    '',
+    undefined,
+    MENTION_MAP,
+  );
+  assert.equal(lines.length, 4);
+  assert.deepEqual(lines[0], [{ tag: 'text', text: '@reviewer 评论：' }]);
+  assert.deepEqual(lines[1], [
+    { tag: 'at', user_id: OPEN_ID, user_name: 'octocat' },
+    { tag: 'text', text: ' 看一下这个改动' },
+  ]);
+  assert.deepEqual(lines[2], [{ tag: 'text', text: 'cc @stranger' }]);
+  assert.deepEqual(lines[3], [{ tag: 'a', text: '查看详情', href: 'https://x/1' }]);
+  parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { content: lines } } } }, 'payload');
+});
+
+test('mention: mention before <img> converted, img link preserved (no token)', async () => {
+  const lines = await assembleGenericMessage(`@octocat 看图\n${GH_IMG}`, '', '', undefined, MENTION_MAP);
+  assert.equal(lines.length, 2);
+  assert.deepEqual(lines[0], [
+    { tag: 'at', user_id: OPEN_ID, user_name: 'octocat' },
+    { tag: 'text', text: ' 看图' },
+  ]);
+  assert.deepEqual(lines[1], [{ tag: 'a', text: '📷 图片', href: GH_IMG_URL }]);
 });
