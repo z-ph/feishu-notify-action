@@ -37,7 +37,7 @@ Two mutually exclusive modes: `review_requested` events are always composed from
 
 ### @ mentions in `message` (non-`review_requested` events)
 
-With `enable-mention: 'true'` + `reviewer-map`, `@GitHub登录名` in `message` matching the map (case-insensitive) becomes a real Feishu @ — use it to @ the PR author on review results, or to convert @mentions inside comment bodies:
+With `enable-mention: 'true'` + `reviewer-map`, `@GitHub登录名` in `message` matching the map (case-sensitive; keys must match the GitHub login exactly) becomes a real Feishu @ — use it to @ the PR author on review results, or to convert @mentions inside comment bodies:
 
 ```yaml
 - uses: z-ph/feishu-notify-action@v1

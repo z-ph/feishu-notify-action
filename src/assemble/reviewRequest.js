@@ -28,7 +28,7 @@ function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
   const mention = () => {
     if (team) return [{ tag: 'text', text: `团队 ${team.slug || team.name}` }];
     if (!enableMention) return [];
-    const openId = reviewerMap[reviewer.login.toLowerCase()];
+    const openId = reviewerMap[reviewer.login];
     if (!openId) {
       throw new Error(
         `enable-mention is on but reviewer "${reviewer.login}" is missing from reviewer-map — add the mapping or turn enable-mention off`,
@@ -119,7 +119,7 @@ function splitMentionElements(text, mentionMap) {
     else elements.push({ tag: 'text', text: slice });
   };
   for (const match of text.matchAll(MENTION_RE)) {
-    const openId = mentionMap[match[1].toLowerCase()];
+    const openId = mentionMap[match[1]];
     if (!openId) continue;
     pushText(match.index);
     elements.push({ tag: 'at', user_id: openId, user_name: match[1] });

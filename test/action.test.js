@@ -318,11 +318,11 @@ test('mention: @org/team team mention stays literal', () => {
   assert.deepEqual(els, [{ tag: 'text', text: '@octocat/team 看一下' }]);
 });
 
-test('mention: multiple mentions in one line, lookup case-insensitive', () => {
+test('mention: multiple mentions in one line, lookup is case-sensitive', () => {
   const els = splitMentionElements('@OctoCat 和 @hubot', MENTION_MAP);
+  // map key is "octocat"; "@OctoCat" must stay plain text (GitHub logins are case-sensitive for map keys)
   assert.deepEqual(els, [
-    { tag: 'at', user_id: OPEN_ID, user_name: 'OctoCat' },
-    { tag: 'text', text: ' 和 ' },
+    { tag: 'text', text: '@OctoCat 和 ' },
     { tag: 'at', user_id: OPEN_ID_2, user_name: 'hubot' },
   ]);
 });
