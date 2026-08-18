@@ -71,13 +71,16 @@ function readEvent() {
       throw new Error('enable-mention is on but reviewer-map is empty — add mappings or turn enable-mention off');
     }
     const mentionMap = inputs.enableMention ? inputs.reviewerMap : undefined;
+    // 事件触发者（评论人 / 评审人 / 合并人）—— 不 @ 自己。
+    // sender 是 GitHub 事件 payload 中统一表示操作发起者的字段。
+    const actor = event.sender?.login || '';
     // 有 github-token 时，message 里的私有仓库 user-attachments 图片
     // 先经 API body_html 解析为签名直链再下载（直访私有附件恒 404）。
     const resolveUrl = inputs.githubToken
       ? buildImageUrlResolver({ event, githubToken: inputs.githubToken })
       : undefined;
     title = inputs.title;
-    content = await assembleGenericMessage(inputs.message, inputs.link, token, resolveUrl, mentionMap);
+    content = await assembleGenericMessage(inputs.message, inputs.link, token, resolveUrl, mentionMap, actor);
   }
 
   const unsigned = { msg_type: 'post', content: { post: { zh_cn: { content } } } };

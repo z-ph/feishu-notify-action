@@ -57,7 +57,8 @@ Semantics differ from `review_requested` on purpose — `message` is user conten
 
 - **unmapped** `@login` stays plain text — @ing a bot or an external user must not fail the notification;
 - but `enable-mention: 'true'` with an **empty** `reviewer-map` is a configuration error and fails the step;
-- email-shaped `foo@bar` and team `@org/team` mentions are never converted.
+- email-shaped `foo@bar` and team `@org/team` mentions are never converted;
+- **the event sender (actor) is never @-mentioned** — you won't @ yourself when commenting or approving someone's PR. The action reads `event.sender.login` from the GitHub event payload and skips it, so `@${{ github.event.review.user.login }}` (the reviewer who is also the sender) stays plain text while `@${{ github.event.pull_request.user.login }}` (the PR author) becomes a real @.
 
 ### Template variables
 

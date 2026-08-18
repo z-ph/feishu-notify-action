@@ -363,3 +363,68 @@ test('mention: mention before <img> converted, img link preserved (no token)', a
   ]);
   assert.deepEqual(lines[1], [{ tag: 'a', text: '📷 图片', href: GH_IMG_URL }]);
 });
+
+// ---- actor skip：事件触发者不被 @ ----
+
+test('actor-skip: mapped login === actor → stays plain text (you approve your own message)', () => {
+  // actor=octocat, @octocat 在 map 中但等于 actor → 纯文本
+  const els = splitMentionElements('@octocat approved this', MENTION_MAP, 'octocat');
+  assert.deepEqual(els, [{ tag: 'text', text: '@octocat approved this' }]);
+});
+
+test('actor-skip: actor not in message → all mapped logins still @', () => {
+  // actor=hubot, message 只有 @octocat → 正常 @ octocat
+  const els = splitMentionElements('@octocat approved this', MENTION_MAP, 'hubot');
+  assert.deepEqual(els, [
+    { tag: 'at', user_id: OPEN_ID, user_name: 'octocat' },
+    { tag: 'text', text: ' approved this' },
+  ]);
+});
+
+test('actor-skip: actor + PR author in same message → only author @-mentioned', () => {
+  // 你 approve 别人的 PR：actor=octocat（评审人）
+  // splitMentionElements 按行调用——模拟第一行
+  const line1 = splitMentionElements('@octocat 批准了', MENTION_MAP, 'octocat');
+  assert.deepEqual(line1, [{ tag: 'text', text: '@octocat 批准了' }]);
+  assert.ok(!line1.some((e) => e.tag === 'at'));
+  // 第二行：提交人：@hubot → text + at
+  const line2 = splitMentionElements('提交人：@hubot', MENTION_MAP, 'octocat');
+  assert.deepEqual(line2[1], { tag: 'at', user_id: OPEN_ID_2, user_name: 'hubot' });
+});
+
+test('actor-skip: actor is case-sensitive match (GitHub logins are case-sensitive)', () => {
+  // actor=Octocat（大写），message @octocat（小写）→ 不匹配 actor，正常 @（大小写不一致视为不同用户）
+  const els = splitMentionElements('@octocat commented', MENTION_MAP, 'Octocat');
+  assert.deepEqual(els[0], { tag: 'at', user_id: OPEN_ID, user_name: 'octocat' });
+});
+
+test('actor-skip: no actor passed → all mapped logins @ (backward compatible)', () => {
+  const els = splitMentionElements('@octocat commented', MENTION_MAP);
+  assert.deepEqual(els[0], { tag: 'at', user_id: OPEN_ID, user_name: 'octocat' });
+});
+
+test('actor-skip: actor not in map → still skipped (covers self-mention with no mapping)', () => {
+  // actor=stranger 不在 map 中，message @stranger 也不会被 @（actor 跳过先于 map 查找）
+  const els = splitMentionElements('@stranger commented', MENTION_MAP, 'stranger');
+  assert.deepEqual(els, [{ tag: 'text', text: '@stranger commented' }]);
+});
+
+test('actor-skip: assembleGenericMessage passes actor through', async () => {
+  // 你 approve 别人的 PR：actor=octocat
+  const lines = await assembleGenericMessage(
+    '@octocat 批准了\n提交人：@hubot',
+    'https://x/1',
+    '',
+    undefined,
+    MENTION_MAP,
+    'octocat',
+  );
+  // 第一行: @octocat 是 actor → 纯文本
+  assert.deepEqual(lines[0], [{ tag: 'text', text: '@octocat 批准了' }]);
+  // 第二行: 提交人：@hubot → text + at
+  assert.equal(lines[1].length, 2);
+  assert.deepEqual(lines[1][0], { tag: 'text', text: '提交人：' });
+  assert.deepEqual(lines[1][1], { tag: 'at', user_id: OPEN_ID_2, user_name: 'hubot' });
+  // 整体通过 payload 校验
+  parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { content: lines } } } }, 'payload');
+});
