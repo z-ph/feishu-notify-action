@@ -58,6 +58,50 @@ function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
   };
 }
 
+// 装配层：pull_request edited 事件卡片。
+// changes 只携带被编辑字段的旧值：标题变更渲染「旧 → 新」摘要行；
+// 正文变更只提示「描述已更新」（{{pr.anchor}} 即链接），不贴全文 diff——
+// 正文 diff 刷屏且会复用图片处理链路引入复杂度（见 issue 讨论，第一版不做）。
+// edited 不 @ 任何人：编辑大多来自作者本人，@ 无意义。
+// 自定义模板引用未变化的 changes 变量时渲染为空串（与 reviewer/team 变量约定一致）。
+
+const DEFAULT_EDITED_TITLE_TEMPLATE = '✏️ PR #{{pr.number}} {{edit.summary}}';
+
+// 默认正文按实际变更的行组装：没有 title 变更就不出现「旧 → 新」行，反之亦然。
+function defaultEditedMessageTemplate(changes) {
+  const lines = ['{{pr.anchor}} {{pr.title}}'];
+  if (changes.title) lines.push('标题：{{changes.title.from}} → {{pr.title}}');
+  if (changes.body) lines.push('描述已更新');
+  return lines.join('\n');
+}
+
+function assemblePrEdited(event, templates) {
+  const pr = event.pull_request;
+  const changes = event.changes;
+  const titleChanged = changes.title !== undefined;
+  const bodyChanged = changes.body !== undefined;
+
+  const stringVars = {
+    'pr.number': String(pr.number),
+    'pr.title': pr.title,
+    'pr.url': pr.html_url,
+    author: pr.user.login,
+    'changes.title.from': titleChanged ? changes.title.from : '',
+    'changes.body.from': bodyChanged ? changes.body.from : '',
+    'edit.summary': titleChanged && bodyChanged ? '标题和描述已更新' : titleChanged ? '标题已更新' : '描述已更新',
+  };
+
+  const resolvers = {
+    ...Object.fromEntries(Object.entries(stringVars).map(([k, v]) => [k, () => [{ tag: 'text', text: v }]])),
+    'pr.anchor': () => [{ tag: 'a', text: `PR #${pr.number}`, href: pr.html_url }],
+  };
+
+  return {
+    title: renderString(templates.title || DEFAULT_EDITED_TITLE_TEMPLATE, stringVars),
+    lines: renderElements(templates.message || defaultEditedMessageTemplate(changes), resolvers),
+  };
+}
+
 // 解析 GitHub 上传图片的 <img> 标签，下载图片并上传飞书，返回 img 元素。
 // 飞书 webhook post 的 img 元素需要 image_key（先上传图片到飞书服务器）。
 // 没有 app-id/app-secret 时，降级为「📷 图片」超链接（点击跳转原图）。
@@ -156,4 +200,11 @@ async function assembleGenericMessage(message, link, token, resolveUrl, mentionM
   return filtered;
 }
 
-export { assembleReviewRequest, assembleGenericMessage, splitMentionElements, parseImgTags, extractImgUrls };
+export {
+  assembleReviewRequest,
+  assemblePrEdited,
+  assembleGenericMessage,
+  splitMentionElements,
+  parseImgTags,
+  extractImgUrls,
+};

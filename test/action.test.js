@@ -3,9 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseFlatYamlMap } from '../src/tool/flatYaml.js';
-import { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } from '../src/validate/schemas.js';
+import { inputsSchema, reviewRequestedEventSchema, prEditedEventSchema, payloadSchema, parseOrThrow } from '../src/validate/schemas.js';
 import { renderString, renderElements } from '../src/assemble/templates.js';
-import { assembleReviewRequest, assembleGenericMessage } from '../src/assemble/reviewRequest.js';
+import { assembleReviewRequest, assemblePrEdited, assembleGenericMessage } from '../src/assemble/reviewRequest.js';
 import feishuImage from '../src/tool/feishuImage.js';
 import { parseImgTags, extractImgUrls, splitMentionElements } from '../src/assemble/reviewRequest.js';
 
@@ -67,6 +67,47 @@ test('event: accepts review_requested with reviewer', () => {
 test('event: rejects when neither reviewer nor team present', () => {
   const { requested_reviewer, ...noReviewer } = baseEvent;
   assert.throws(() => parseOrThrow(reviewRequestedEventSchema, noReviewer, 'event'), /requested_reviewer/);
+});
+
+const baseEditedEvent = {
+  action: 'edited',
+  pull_request: baseEvent.pull_request,
+  changes: { title: { from: 'feat: old' } },
+};
+
+test('event: accepts edited with title change', () => {
+  const event = parseOrThrow(prEditedEventSchema, baseEditedEvent, 'event');
+  assert.equal(event.changes.title.from, 'feat: old');
+});
+
+test('event: accepts edited with body change', () => {
+  const event = parseOrThrow(
+    prEditedEventSchema,
+    { ...baseEditedEvent, changes: { body: { from: 'old body' } } },
+    'event',
+  );
+  assert.equal(event.changes.body.from, 'old body');
+});
+
+test('event: accepts edited with title + body changes', () => {
+  const event = parseOrThrow(
+    prEditedEventSchema,
+    { ...baseEditedEvent, changes: { title: { from: 'a' }, body: { from: 'b' } } },
+    'event',
+  );
+  assert.ok(event.changes.title && event.changes.body);
+});
+
+test('event: rejects edited without changes, fail-loud', () => {
+  const { changes, ...noChanges } = baseEditedEvent;
+  assert.throws(() => parseOrThrow(prEditedEventSchema, noChanges, 'event'), /changes/);
+});
+
+test('event: rejects edited with empty changes object, fail-loud', () => {
+  assert.throws(
+    () => parseOrThrow(prEditedEventSchema, { ...baseEditedEvent, changes: {} }, 'event'),
+    /empty changes/,
+  );
 });
 
 // ---- validate: payload ----
@@ -158,6 +199,91 @@ test('generic: message lines plus detail link', async () => {
   const lines = await assembleGenericMessage('a\nb', 'https://x/1');
   assert.equal(lines.length, 3);
   assert.deepEqual(lines[2], [{ tag: 'a', text: '查看详情', href: 'https://x/1' }]);
+});
+
+// ---- assemble: pull_request edited ----
+
+test('edited: title-only change renders old → new summary line', () => {
+  const event = parseOrThrow(prEditedEventSchema, baseEditedEvent, 'event');
+  const { title, lines } = assemblePrEdited(event, {});
+  assert.equal(title, '✏️ PR #38 标题已更新');
+  // renderElements 按 token 切分元素，相邻 text 不合并（与 review_requested 路径一致）
+  assert.deepEqual(lines[0], [
+    { tag: 'a', text: 'PR #38', href: 'https://github.com/a/b/pull/38' },
+    { tag: 'text', text: ' ' },
+    { tag: 'text', text: 'feat: x' },
+  ]);
+  assert.deepEqual(lines[1].map((el) => el.text).join(''), '标题：feat: old → feat: x');
+  assert.ok(lines[1].every((el) => el.tag === 'text'));
+  assert.equal(lines.length, 2);
+  parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { title, content: lines } } } }, 'payload');
+});
+
+test('edited: body-only change renders 描述已更新 line only', () => {
+  const event = parseOrThrow(
+    prEditedEventSchema,
+    { ...baseEditedEvent, changes: { body: { from: 'old body' } } },
+    'event',
+  );
+  const { title, lines } = assemblePrEdited(event, {});
+  assert.equal(title, '✏️ PR #38 描述已更新');
+  // 标题未变：默认模板不出现「旧 → 新」行
+  assert.equal(lines.length, 2);
+  assert.deepEqual(lines[1], [{ tag: 'text', text: '描述已更新' }]);
+  parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { title, content: lines } } } }, 'payload');
+});
+
+test('edited: title + body change renders both change lines', () => {
+  const event = parseOrThrow(
+    prEditedEventSchema,
+    { ...baseEditedEvent, changes: { title: { from: 'feat: old' }, body: { from: 'old body' } } },
+    'event',
+  );
+  const { title, lines } = assemblePrEdited(event, {});
+  assert.equal(title, '✏️ PR #38 标题和描述已更新');
+  assert.equal(lines.length, 3);
+  assert.deepEqual(lines[1].map((el) => el.text).join(''), '标题：feat: old → feat: x');
+  assert.deepEqual(lines[2], [{ tag: 'text', text: '描述已更新' }]);
+});
+
+test('edited: changes.body.from is exposed to custom templates', () => {
+  const event = parseOrThrow(
+    prEditedEventSchema,
+    { ...baseEditedEvent, changes: { body: { from: 'old body' } } },
+    'event',
+  );
+  const { lines } = assemblePrEdited(event, { message: '上一版正文：{{changes.body.from}}' });
+  assert.deepEqual(lines[0].map((el) => el.text).join(''), '上一版正文：old body');
+});
+
+test('edited: absent change variable renders empty string in custom templates', () => {
+  // 标题未变时 {{changes.title.from}} 渲染为空串（与 reviewer/team 变量约定一致），不抛错
+  const event = parseOrThrow(
+    prEditedEventSchema,
+    { ...baseEditedEvent, changes: { body: { from: 'old body' } } },
+    'event',
+  );
+  const { lines } = assemblePrEdited(event, { message: '标题从「{{changes.title.from}}」改为「{{pr.title}}」' });
+  assert.deepEqual(lines[0].map((el) => el.text).join(''), '标题从「」改为「feat: x」');
+});
+
+test('edited: user templates override defaults', () => {
+  const event = parseOrThrow(prEditedEventSchema, baseEditedEvent, 'event');
+  const { title, lines } = assemblePrEdited(event, {
+    title: '[edit] {{pr.number}} {{edit.summary}}',
+    message: '{{pr.anchor}} by {{author}}',
+  });
+  assert.equal(title, '[edit] 38 标题已更新');
+  assert.deepEqual(lines[0], [
+    { tag: 'a', text: 'PR #38', href: 'https://github.com/a/b/pull/38' },
+    { tag: 'text', text: ' by ' },
+    { tag: 'text', text: 'z-ph' },
+  ]);
+});
+
+test('edited: unknown template variable throws with available list', () => {
+  const event = parseOrThrow(prEditedEventSchema, baseEditedEvent, 'event');
+  assert.throws(() => assemblePrEdited(event, { title: '{{nope}}' }), /unknown template variable.*edit.summary/);
 });
 
 // ---- assemble: img tag parsing ----

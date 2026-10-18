@@ -4456,6 +4456,8 @@ const inputsSchema = objectType({
     .transform((v) => v === 'true'),
   titleTemplate: stringType().default(''),
   messageTemplate: stringType().default(''),
+  editedTitleTemplate: stringType().default(''),
+  editedMessageTemplate: stringType().default(''),
   appId: stringType().default(''),
   appSecret: stringType().default(''),
   githubToken: stringType().default(''),
@@ -4465,15 +4467,17 @@ const inputsSchema = objectType({
 
 const userSchema = objectType({ login: stringType().min(1) }).passthrough();
 
+const prPullRequest = objectType({
+    number: numberType().int().positive(),
+    title: stringType().default(''),
+    html_url: stringType().url(),
+    user: userSchema,
+  })
+  .passthrough();
+
 const reviewRequestedEventSchema = objectType({
     action: literalType('review_requested'),
-    pull_request: objectType({
-        number: numberType().int().positive(),
-        title: stringType().default(''),
-        html_url: stringType().url(),
-        user: userSchema,
-      })
-      .passthrough(),
+    pull_request: prPullRequest,
     requested_reviewer: userSchema.optional(),
     requested_team: objectType({ slug: stringType().default(''), name: stringType().default('') })
       .passthrough()
@@ -4483,6 +4487,22 @@ const reviewRequestedEventSchema = objectType({
   .refine((e) => e.requested_reviewer || e.requested_team, {
     message: 'review_requested event without requested_reviewer/requested_team',
   });
+
+// pull_request edited：changes 携带改动前旧值，且只含被编辑的字段。
+// 缺 changes 或 changes 既无 title 又无 body 属异常 payload，直接抛错，不静默发空卡片。
+const prEditedEventSchema = objectType({
+    action: literalType('edited'),
+    pull_request: prPullRequest,
+    changes: objectType({
+        title: objectType({ from: stringType() }).passthrough().optional(),
+        body: objectType({ from: stringType() }).passthrough().optional(),
+      })
+      .passthrough()
+      .refine((c) => c.title !== undefined || c.body !== undefined, {
+        message: 'edited event with empty changes (expected changes.title.from and/or changes.body.from)',
+      }),
+  })
+  .passthrough();
 
 // ---- 输出 payload ----
 
@@ -4624,6 +4644,50 @@ function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
   };
 }
 
+// 装配层：pull_request edited 事件卡片。
+// changes 只携带被编辑字段的旧值：标题变更渲染「旧 → 新」摘要行；
+// 正文变更只提示「描述已更新」（{{pr.anchor}} 即链接），不贴全文 diff——
+// 正文 diff 刷屏且会复用图片处理链路引入复杂度（见 issue 讨论，第一版不做）。
+// edited 不 @ 任何人：编辑大多来自作者本人，@ 无意义。
+// 自定义模板引用未变化的 changes 变量时渲染为空串（与 reviewer/team 变量约定一致）。
+
+const DEFAULT_EDITED_TITLE_TEMPLATE = '✏️ PR #{{pr.number}} {{edit.summary}}';
+
+// 默认正文按实际变更的行组装：没有 title 变更就不出现「旧 → 新」行，反之亦然。
+function defaultEditedMessageTemplate(changes) {
+  const lines = ['{{pr.anchor}} {{pr.title}}'];
+  if (changes.title) lines.push('标题：{{changes.title.from}} → {{pr.title}}');
+  if (changes.body) lines.push('描述已更新');
+  return lines.join('\n');
+}
+
+function assemblePrEdited(event, templates) {
+  const pr = event.pull_request;
+  const changes = event.changes;
+  const titleChanged = changes.title !== undefined;
+  const bodyChanged = changes.body !== undefined;
+
+  const stringVars = {
+    'pr.number': String(pr.number),
+    'pr.title': pr.title,
+    'pr.url': pr.html_url,
+    author: pr.user.login,
+    'changes.title.from': titleChanged ? changes.title.from : '',
+    'changes.body.from': bodyChanged ? changes.body.from : '',
+    'edit.summary': titleChanged && bodyChanged ? '标题和描述已更新' : titleChanged ? '标题已更新' : '描述已更新',
+  };
+
+  const resolvers = {
+    ...Object.fromEntries(Object.entries(stringVars).map(([k, v]) => [k, () => [{ tag: 'text', text: v }]])),
+    'pr.anchor': () => [{ tag: 'a', text: `PR #${pr.number}`, href: pr.html_url }],
+  };
+
+  return {
+    title: renderString(templates.title || DEFAULT_EDITED_TITLE_TEMPLATE, stringVars),
+    lines: renderElements(templates.message || defaultEditedMessageTemplate(changes), resolvers),
+  };
+}
+
 // 解析 GitHub 上传图片的 <img> 标签，下载图片并上传飞书，返回 img 元素。
 // 飞书 webhook post 的 img 元素需要 image_key（先上传图片到飞书服务器）。
 // 没有 app-id/app-secret 时，降级为「📷 图片」超链接（点击跳转原图）。
@@ -4754,6 +4818,8 @@ function readInputs() {
       enableMention: process.env['INPUT_ENABLE-MENTION'],
       titleTemplate: process.env['INPUT_TITLE-TEMPLATE'] || '',
       messageTemplate: process.env['INPUT_MESSAGE-TEMPLATE'] || '',
+      editedTitleTemplate: process.env['INPUT_EDITED-TITLE-TEMPLATE'] || '',
+      editedMessageTemplate: process.env['INPUT_EDITED-MESSAGE-TEMPLATE'] || '',
       appId: process.env['INPUT_APP-ID'] || '',
       appSecret: process.env['INPUT_APP-SECRET'] || '',
       githubToken: process.env['INPUT_GITHUB-TOKEN'] || '',
@@ -4790,6 +4856,17 @@ function readEvent() {
     );
     title = review.title;
     content = review.lines;
+  } else if (event.action === 'edited' && event.pull_request) {
+    // pull_request edited 同样只走模板组装：GitHub payload 的 changes 携带旧值，
+    // 缺 changes / 空 changes 在 schema 层 fail-loud，不会发出空卡片。
+    // 带 pull_request 才进此分支：issue 等的 edited 事件保持走下方通用路径，行为不变。
+    const editedEvent = parseOrThrow(prEditedEventSchema, event, 'edited event');
+    const edited = assemblePrEdited(editedEvent, {
+      title: inputs.editedTitleTemplate,
+      message: inputs.editedMessageTemplate,
+    });
+    title = edited.title;
+    content = edited.lines;
   } else {
     // enable-mention 在通用路径的语义：message 里的 @GitHub登录名 经 reviewer-map
     // 转换为飞书 @ 元素；未命中映射的保持纯文本（评论正文是用户内容，见 assemble 层）。
