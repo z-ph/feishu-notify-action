@@ -4646,26 +4646,20 @@ function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
 }
 
 // 装配层：pull_request edited 事件卡片。
-// changes 只携带被编辑字段的旧值：标题变更渲染「旧 → 新」摘要行。
-// 正文变更把【新正文】渲染进卡片（截断 + 图片走现有 <img> 链路），不看链接也能知道
-// 现在写成什么样；旧正文只通过 {{changes.body.from}} 暴露给自定义模板，不双段同贴。
+// 默认只发【编辑后的最新内容】：卡片标题经 {{edit.summary}} 说明改了什么，
+// 正文区是 PR 锚点 + 最新标题，正文变更时把最新正文段落追加进卡片（截断）。
+// 不做 diff、默认不展示任何旧值；{{changes.title.from}} / {{changes.body.from}}
+// 仍暴露给自定义模板，需要旧值对比的人自己组。
 // 正文为 markdown 源码，按现有通用路径约定按行转纯文本，不做 markdown 渲染。
 // edited 不 @ 任何人：编辑大多来自作者本人，@ 无意义。
-// 自定义模板引用未变化的 changes 变量时渲染为空串（与 reviewer/team 变量约定一致）；
-// 自定义 message 模板完全接管正文，不再自动追加新正文段落。
+// 自定义 edited-message-template 完全接管正文，新正文不再自动追加。
 
 const DEFAULT_EDITED_TITLE_TEMPLATE = '✏️ PR #{{pr.number}} {{edit.summary}}';
+const DEFAULT_EDITED_MESSAGE_TEMPLATE = '{{pr.anchor}} {{pr.title}}';
 
 // 正文渲染上限：超过截断并提示看链接（飞书 post 消息有总大小限制，群里也不宜刷长文）。
 const EDITED_BODY_MAX_CHARS = 3000;
 const EDITED_BODY_TRIMMED_HINT = '……（正文过长已截断，点链接看全文）';
-
-// 默认正文只按实际变更组装标题摘要行；正文内容在模板渲染后追加（见 assemblePrEdited）。
-function defaultEditedMessageTemplate(changes) {
-  const lines = ['{{pr.anchor}} {{pr.title}}'];
-  if (changes.title) lines.push('标题：{{changes.title.from}} → {{pr.title}}');
-  return lines.join('\n');
-}
 
 async function assemblePrEdited(event, templates, token = '', resolveUrl = (url) => url) {
   const pr = event.pull_request;
@@ -4689,7 +4683,7 @@ async function assemblePrEdited(event, templates, token = '', resolveUrl = (url)
     'pr.anchor': () => [{ tag: 'a', text: `PR #${pr.number}`, href: pr.html_url }],
   };
 
-  const lines = renderElements(templates.message || defaultEditedMessageTemplate(changes), resolvers);
+  const lines = renderElements(templates.message || DEFAULT_EDITED_MESSAGE_TEMPLATE, resolvers);
 
   // 默认模板下正文变更把新正文渲染进卡片：清空给提示，超长截断；
   // 逐行走 parseImgTags（与评论一致的图片链路，无 token 降级为链接）。

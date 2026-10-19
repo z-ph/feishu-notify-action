@@ -209,19 +209,16 @@ const editedBodyEvent = (body, changes) => ({
   changes,
 });
 
-test('edited: title-only change renders old → new summary line', async () => {
+test('edited: title-only change sends latest title, no old → new line', async () => {
   const event = parseOrThrow(prEditedEventSchema, baseEditedEvent, 'event');
   const { title, lines } = await assemblePrEdited(event, {});
   assert.equal(title, '✏️ PR #38 标题已更新');
   // renderElements 按 token 切分元素，相邻 text 不合并（与 review_requested 路径一致）
-  assert.deepEqual(lines[0], [
+  assert.deepEqual(lines, [[
     { tag: 'a', text: 'PR #38', href: 'https://github.com/a/b/pull/38' },
     { tag: 'text', text: ' ' },
     { tag: 'text', text: 'feat: x' },
-  ]);
-  assert.deepEqual(lines[1].map((el) => el.text).join(''), '标题：feat: old → feat: x');
-  assert.ok(lines[1].every((el) => el.tag === 'text'));
-  assert.equal(lines.length, 2);
+  ]]);
   parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { title, content: lines } } } }, 'payload');
 });
 
@@ -271,7 +268,7 @@ test('edited: <img> in new body degrades to link without token', async () => {
   parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { content: lines } } } }, 'payload');
 });
 
-test('edited: title + body change renders summary line then body paragraphs', async () => {
+test('edited: title + body change renders anchor line then latest body paragraphs', async () => {
   const event = parseOrThrow(
     prEditedEventSchema,
     editedBodyEvent('new body', { title: { from: 'feat: old' }, body: { from: 'old body' } }),
@@ -279,9 +276,8 @@ test('edited: title + body change renders summary line then body paragraphs', as
   );
   const { title, lines } = await assemblePrEdited(event, {});
   assert.equal(title, '✏️ PR #38 标题和描述已更新');
-  assert.equal(lines.length, 3);
-  assert.deepEqual(lines[1].map((el) => el.text).join(''), '标题：feat: old → feat: x');
-  assert.deepEqual(lines[2], [{ tag: 'text', text: 'new body' }]);
+  assert.equal(lines.length, 2);
+  assert.deepEqual(lines[1], [{ tag: 'text', text: 'new body' }]);
 });
 
 test('edited: changes.body.from is exposed to custom templates', async () => {
