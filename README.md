@@ -82,7 +82,9 @@ message-template: |
 
 `pull_request` 的 `edited` action（PR 标题或正文被编辑）走独立的模板组装，GitHub 在 payload 的 `changes` 中携带改动前的旧值：
 
-- 标题变更渲染 `旧标题 → 新标题` 摘要行；正文变更只提示「描述已更新」——不贴全文 diff，卡片里的 `{{pr.anchor}}` 链接指向 PR；
+- 标题变更渲染 `旧标题 → 新标题` 摘要行；
+- **正文变更把新正文直接渲染进卡片**（超过 3000 字符截断并提示点链接看全文；正文清空时提示「描述已清空」），不看链接也能知道现在写成什么样；正文里的 `<img>` 图片走与评论一致的链路（有 `app-id`+`app-secret` 内联，否则降级为「📷 图片」链接）；正文按 markdown 源码逐行转纯文本，不做 markdown 渲染；
+- 旧正文不双段同贴，只通过 `{{changes.body.from}}` 暴露给自定义模板；
 - 默认不 @ 任何人（编辑大多来自作者本人）；
 - `changes` 缺失或为空的异常 payload 直接让 step 失败，不静默发空卡片。
 
@@ -109,8 +111,9 @@ edited-title-template: ✏️ PR #{{pr.number}} {{edit.summary}}
 edited-message-template: |
   {{pr.anchor}} {{pr.title}}
   标题：{{changes.title.from}} → {{pr.title}}   # 仅标题变化时
-  描述已更新                                     # 仅正文变化时
 ```
+
+默认模板下，正文变化时新正文段落自动追加在模板行之后（截断 3000 字符，清空时提示「描述已清空」）；一旦自定义 `edited-message-template`，正文不再自动追加，卡片完全由模板控制。
 
 Unknown variables fail the step with the list of available ones — no silent blanks.
 

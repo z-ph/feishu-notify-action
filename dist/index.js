@@ -4470,6 +4470,7 @@ const userSchema = objectType({ login: stringType().min(1) }).passthrough();
 const prPullRequest = objectType({
     number: numberType().int().positive(),
     title: stringType().default(''),
+    body: stringType().nullable().default(''),
     html_url: stringType().url(),
     user: userSchema,
   })
@@ -4645,27 +4646,33 @@ function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
 }
 
 // 装配层：pull_request edited 事件卡片。
-// changes 只携带被编辑字段的旧值：标题变更渲染「旧 → 新」摘要行；
-// 正文变更只提示「描述已更新」（{{pr.anchor}} 即链接），不贴全文 diff——
-// 正文 diff 刷屏且会复用图片处理链路引入复杂度（见 issue 讨论，第一版不做）。
+// changes 只携带被编辑字段的旧值：标题变更渲染「旧 → 新」摘要行。
+// 正文变更把【新正文】渲染进卡片（截断 + 图片走现有 <img> 链路），不看链接也能知道
+// 现在写成什么样；旧正文只通过 {{changes.body.from}} 暴露给自定义模板，不双段同贴。
+// 正文为 markdown 源码，按现有通用路径约定按行转纯文本，不做 markdown 渲染。
 // edited 不 @ 任何人：编辑大多来自作者本人，@ 无意义。
-// 自定义模板引用未变化的 changes 变量时渲染为空串（与 reviewer/team 变量约定一致）。
+// 自定义模板引用未变化的 changes 变量时渲染为空串（与 reviewer/team 变量约定一致）；
+// 自定义 message 模板完全接管正文，不再自动追加新正文段落。
 
 const DEFAULT_EDITED_TITLE_TEMPLATE = '✏️ PR #{{pr.number}} {{edit.summary}}';
 
-// 默认正文按实际变更的行组装：没有 title 变更就不出现「旧 → 新」行，反之亦然。
+// 正文渲染上限：超过截断并提示看链接（飞书 post 消息有总大小限制，群里也不宜刷长文）。
+const EDITED_BODY_MAX_CHARS = 3000;
+const EDITED_BODY_TRIMMED_HINT = '……（正文过长已截断，点链接看全文）';
+
+// 默认正文只按实际变更组装标题摘要行；正文内容在模板渲染后追加（见 assemblePrEdited）。
 function defaultEditedMessageTemplate(changes) {
   const lines = ['{{pr.anchor}} {{pr.title}}'];
   if (changes.title) lines.push('标题：{{changes.title.from}} → {{pr.title}}');
-  if (changes.body) lines.push('描述已更新');
   return lines.join('\n');
 }
 
-function assemblePrEdited(event, templates) {
+async function assemblePrEdited(event, templates, token = '', resolveUrl = (url) => url) {
   const pr = event.pull_request;
   const changes = event.changes;
   const titleChanged = changes.title !== undefined;
   const bodyChanged = changes.body !== undefined;
+  const newBody = pr.body || '';
 
   const stringVars = {
     'pr.number': String(pr.number),
@@ -4682,9 +4689,31 @@ function assemblePrEdited(event, templates) {
     'pr.anchor': () => [{ tag: 'a', text: `PR #${pr.number}`, href: pr.html_url }],
   };
 
+  const lines = renderElements(templates.message || defaultEditedMessageTemplate(changes), resolvers);
+
+  // 默认模板下正文变更把新正文渲染进卡片：清空给提示，超长截断；
+  // 逐行走 parseImgTags（与评论一致的图片链路，无 token 降级为链接）。
+  // 不 @ 正文里的任何人（edited 语义，见文件头注释）。
+  if (!templates.message && bodyChanged) {
+    const trimmed = newBody.trim();
+    if (!trimmed) {
+      lines.push([{ tag: 'text', text: '描述已清空' }]);
+    } else {
+      const sliced = trimmed.length > EDITED_BODY_MAX_CHARS ? trimmed.slice(0, EDITED_BODY_MAX_CHARS) : trimmed;
+      for (const line of sliced.split('\n')) {
+        if (!line.trim()) continue;
+        const els = await parseImgTags(line.trim(), token, resolveUrl);
+        lines.push(els.length > 0 ? els : [{ tag: 'text', text: line.trim() }]);
+      }
+      if (trimmed.length > EDITED_BODY_MAX_CHARS) {
+        lines.push([{ tag: 'text', text: EDITED_BODY_TRIMMED_HINT }]);
+      }
+    }
+  }
+
   return {
     title: renderString(templates.title || DEFAULT_EDITED_TITLE_TEMPLATE, stringVars),
-    lines: renderElements(templates.message || defaultEditedMessageTemplate(changes), resolvers),
+    lines,
   };
 }
 
@@ -4861,10 +4890,16 @@ function readEvent() {
     // 缺 changes / 空 changes 在 schema 层 fail-loud，不会发出空卡片。
     // 带 pull_request 才进此分支：issue 等的 edited 事件保持走下方通用路径，行为不变。
     const editedEvent = parseOrThrow(prEditedEventSchema, event, 'edited event');
-    const edited = assemblePrEdited(editedEvent, {
-      title: inputs.editedTitleTemplate,
-      message: inputs.editedMessageTemplate,
-    });
+    // 有 github-token 时正文里的私有仓库图片同样经签名 URL 解析。
+    const editResolveUrl = inputs.githubToken
+      ? buildImageUrlResolver({ event, githubToken: inputs.githubToken })
+      : undefined;
+    const edited = await assemblePrEdited(
+      editedEvent,
+      { title: inputs.editedTitleTemplate, message: inputs.editedMessageTemplate },
+      token,
+      editResolveUrl,
+    );
     title = edited.title;
     content = edited.lines;
   } else {

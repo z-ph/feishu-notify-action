@@ -203,9 +203,15 @@ test('generic: message lines plus detail link', async () => {
 
 // ---- assemble: pull_request edited ----
 
-test('edited: title-only change renders old → new summary line', () => {
+const editedBodyEvent = (body, changes) => ({
+  action: 'edited',
+  pull_request: { ...baseEvent.pull_request, body },
+  changes,
+});
+
+test('edited: title-only change renders old → new summary line', async () => {
   const event = parseOrThrow(prEditedEventSchema, baseEditedEvent, 'event');
-  const { title, lines } = assemblePrEdited(event, {});
+  const { title, lines } = await assemblePrEdited(event, {});
   assert.equal(title, '✏️ PR #38 标题已更新');
   // renderElements 按 token 切分元素，相邻 text 不合并（与 review_requested 路径一致）
   assert.deepEqual(lines[0], [
@@ -219,57 +225,100 @@ test('edited: title-only change renders old → new summary line', () => {
   parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { title, content: lines } } } }, 'payload');
 });
 
-test('edited: body-only change renders 描述已更新 line only', () => {
+test('edited: body-only change inlines the new body, no jump needed', async () => {
   const event = parseOrThrow(
     prEditedEventSchema,
-    { ...baseEditedEvent, changes: { body: { from: 'old body' } } },
+    editedBodyEvent('new body line 1\nnew body line 2', { body: { from: 'old body' } }),
     'event',
   );
-  const { title, lines } = assemblePrEdited(event, {});
+  const { title, lines } = await assemblePrEdited(event, {});
   assert.equal(title, '✏️ PR #38 描述已更新');
   // 标题未变：默认模板不出现「旧 → 新」行
-  assert.equal(lines.length, 2);
-  assert.deepEqual(lines[1], [{ tag: 'text', text: '描述已更新' }]);
+  assert.equal(lines.length, 3);
+  assert.deepEqual(lines[1], [{ tag: 'text', text: 'new body line 1' }]);
+  assert.deepEqual(lines[2], [{ tag: 'text', text: 'new body line 2' }]);
   parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { title, content: lines } } } }, 'payload');
 });
 
-test('edited: title + body change renders both change lines', () => {
+test('edited: body cleared renders 描述已清空 instead of empty paragraphs', async () => {
   const event = parseOrThrow(
     prEditedEventSchema,
-    { ...baseEditedEvent, changes: { title: { from: 'feat: old' }, body: { from: 'old body' } } },
+    editedBodyEvent('', { body: { from: 'old body' } }),
     'event',
   );
-  const { title, lines } = assemblePrEdited(event, {});
+  const { lines } = await assemblePrEdited(event, {});
+  assert.deepEqual(lines[1], [{ tag: 'text', text: '描述已清空' }]);
+});
+
+test('edited: long body is truncated with a hint line', async () => {
+  const longBody = '长'.repeat(4000);
+  const event = parseOrThrow(prEditedEventSchema, editedBodyEvent(longBody, { body: { from: 'x' } }), 'event');
+  const { lines } = await assemblePrEdited(event, {});
+  const bodyText = lines.slice(1, -1).map((l) => l.map((el) => el.text).join('')).join('');
+  assert.ok(bodyText.length <= 3000);
+  assert.match(lines[lines.length - 1][0].text, /已截断/);
+});
+
+test('edited: <img> in new body degrades to link without token', async () => {
+  const event = parseOrThrow(
+    prEditedEventSchema,
+    editedBodyEvent(`截图如下\n${GH_IMG}`, { body: { from: 'old' } }),
+    'event',
+  );
+  const { lines } = await assemblePrEdited(event, {});
+  assert.deepEqual(lines[1], [{ tag: 'text', text: '截图如下' }]);
+  assert.deepEqual(lines[2], [{ tag: 'a', text: '📷 图片', href: GH_IMG_URL }]);
+  parseOrThrow(payloadSchema, { msg_type: 'post', content: { post: { zh_cn: { content: lines } } } }, 'payload');
+});
+
+test('edited: title + body change renders summary line then body paragraphs', async () => {
+  const event = parseOrThrow(
+    prEditedEventSchema,
+    editedBodyEvent('new body', { title: { from: 'feat: old' }, body: { from: 'old body' } }),
+    'event',
+  );
+  const { title, lines } = await assemblePrEdited(event, {});
   assert.equal(title, '✏️ PR #38 标题和描述已更新');
   assert.equal(lines.length, 3);
   assert.deepEqual(lines[1].map((el) => el.text).join(''), '标题：feat: old → feat: x');
-  assert.deepEqual(lines[2], [{ tag: 'text', text: '描述已更新' }]);
+  assert.deepEqual(lines[2], [{ tag: 'text', text: 'new body' }]);
 });
 
-test('edited: changes.body.from is exposed to custom templates', () => {
+test('edited: changes.body.from is exposed to custom templates', async () => {
   const event = parseOrThrow(
     prEditedEventSchema,
-    { ...baseEditedEvent, changes: { body: { from: 'old body' } } },
+    editedBodyEvent('new body', { body: { from: 'old body' } }),
     'event',
   );
-  const { lines } = assemblePrEdited(event, { message: '上一版正文：{{changes.body.from}}' });
+  const { lines } = await assemblePrEdited(event, { message: '上一版正文：{{changes.body.from}}' });
   assert.deepEqual(lines[0].map((el) => el.text).join(''), '上一版正文：old body');
 });
 
-test('edited: absent change variable renders empty string in custom templates', () => {
+test('edited: custom message template takes over, body not auto-appended', async () => {
+  const event = parseOrThrow(
+    prEditedEventSchema,
+    editedBodyEvent('new body', { body: { from: 'old body' } }),
+    'event',
+  );
+  const { lines } = await assemblePrEdited(event, { message: '正文有改动' });
+  assert.equal(lines.length, 1);
+  assert.deepEqual(lines[0], [{ tag: 'text', text: '正文有改动' }]);
+});
+
+test('edited: absent change variable renders empty string in custom templates', async () => {
   // 标题未变时 {{changes.title.from}} 渲染为空串（与 reviewer/team 变量约定一致），不抛错
   const event = parseOrThrow(
     prEditedEventSchema,
-    { ...baseEditedEvent, changes: { body: { from: 'old body' } } },
+    editedBodyEvent('new body', { body: { from: 'old body' } }),
     'event',
   );
-  const { lines } = assemblePrEdited(event, { message: '标题从「{{changes.title.from}}」改为「{{pr.title}}」' });
+  const { lines } = await assemblePrEdited(event, { message: '标题从「{{changes.title.from}}」改为「{{pr.title}}」' });
   assert.deepEqual(lines[0].map((el) => el.text).join(''), '标题从「」改为「feat: x」');
 });
 
-test('edited: user templates override defaults', () => {
+test('edited: user templates override defaults', async () => {
   const event = parseOrThrow(prEditedEventSchema, baseEditedEvent, 'event');
-  const { title, lines } = assemblePrEdited(event, {
+  const { title, lines } = await assemblePrEdited(event, {
     title: '[edit] {{pr.number}} {{edit.summary}}',
     message: '{{pr.anchor}} by {{author}}',
   });
@@ -281,9 +330,9 @@ test('edited: user templates override defaults', () => {
   ]);
 });
 
-test('edited: unknown template variable throws with available list', () => {
+test('edited: unknown template variable throws with available list', async () => {
   const event = parseOrThrow(prEditedEventSchema, baseEditedEvent, 'event');
-  assert.throws(() => assemblePrEdited(event, { title: '{{nope}}' }), /unknown template variable.*edit.summary/);
+  await assert.rejects(() => assemblePrEdited(event, { title: '{{nope}}' }), /unknown template variable.*edit.summary/);
 });
 
 // ---- assemble: img tag parsing ----

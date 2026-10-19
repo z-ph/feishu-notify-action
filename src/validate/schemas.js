@@ -43,6 +43,7 @@ const prPullRequest = z
   .object({
     number: z.number().int().positive(),
     title: z.string().default(''),
+    body: z.string().nullable().default(''),
     html_url: z.string().url(),
     user: userSchema,
   })

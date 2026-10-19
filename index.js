@@ -70,10 +70,16 @@ function readEvent() {
     // 缺 changes / 空 changes 在 schema 层 fail-loud，不会发出空卡片。
     // 带 pull_request 才进此分支：issue 等的 edited 事件保持走下方通用路径，行为不变。
     const editedEvent = parseOrThrow(prEditedEventSchema, event, 'edited event');
-    const edited = assemblePrEdited(editedEvent, {
-      title: inputs.editedTitleTemplate,
-      message: inputs.editedMessageTemplate,
-    });
+    // 有 github-token 时正文里的私有仓库图片同样经签名 URL 解析。
+    const editResolveUrl = inputs.githubToken
+      ? buildImageUrlResolver({ event, githubToken: inputs.githubToken })
+      : undefined;
+    const edited = await assemblePrEdited(
+      editedEvent,
+      { title: inputs.editedTitleTemplate, message: inputs.editedMessageTemplate },
+      token,
+      editResolveUrl,
+    );
     title = edited.title;
     content = edited.lines;
   } else {
