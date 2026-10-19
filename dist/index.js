@@ -4456,6 +4456,8 @@ const inputsSchema = objectType({
     .transform((v) => v === 'true'),
   titleTemplate: stringType().default(''),
   messageTemplate: stringType().default(''),
+  editedTitleTemplate: stringType().default(''),
+  editedMessageTemplate: stringType().default(''),
   appId: stringType().default(''),
   appSecret: stringType().default(''),
   githubToken: stringType().default(''),
@@ -4465,15 +4467,18 @@ const inputsSchema = objectType({
 
 const userSchema = objectType({ login: stringType().min(1) }).passthrough();
 
+const prPullRequest = objectType({
+    number: numberType().int().positive(),
+    title: stringType().default(''),
+    body: stringType().nullable().default(''),
+    html_url: stringType().url(),
+    user: userSchema,
+  })
+  .passthrough();
+
 const reviewRequestedEventSchema = objectType({
     action: literalType('review_requested'),
-    pull_request: objectType({
-        number: numberType().int().positive(),
-        title: stringType().default(''),
-        html_url: stringType().url(),
-        user: userSchema,
-      })
-      .passthrough(),
+    pull_request: prPullRequest,
     requested_reviewer: userSchema.optional(),
     requested_team: objectType({ slug: stringType().default(''), name: stringType().default('') })
       .passthrough()
@@ -4483,6 +4488,22 @@ const reviewRequestedEventSchema = objectType({
   .refine((e) => e.requested_reviewer || e.requested_team, {
     message: 'review_requested event without requested_reviewer/requested_team',
   });
+
+// pull_request edited：changes 携带改动前旧值，且只含被编辑的字段。
+// 缺 changes 或 changes 既无 title 又无 body 属异常 payload，直接抛错，不静默发空卡片。
+const prEditedEventSchema = objectType({
+    action: literalType('edited'),
+    pull_request: prPullRequest,
+    changes: objectType({
+        title: objectType({ from: stringType() }).passthrough().optional(),
+        body: objectType({ from: stringType() }).passthrough().optional(),
+      })
+      .passthrough()
+      .refine((c) => c.title !== undefined || c.body !== undefined, {
+        message: 'edited event with empty changes (expected changes.title.from and/or changes.body.from)',
+      }),
+  })
+  .passthrough();
 
 // ---- 输出 payload ----
 
@@ -4624,6 +4645,72 @@ function assembleReviewRequest(event, reviewerMap, templates, enableMention) {
   };
 }
 
+// 装配层：pull_request edited 事件卡片。
+// 默认只发【编辑后的最新内容】：卡片标题经 {{edit.summary}} 说明改了什么，
+// 正文区是 PR 锚点 + 最新标题，正文变更时把最新正文段落追加进卡片（截断）。
+// 不做 diff、默认不展示任何旧值；{{changes.title.from}} / {{changes.body.from}}
+// 仍暴露给自定义模板，需要旧值对比的人自己组。
+// 正文为 markdown 源码，按现有通用路径约定按行转纯文本，不做 markdown 渲染。
+// edited 不 @ 任何人：编辑大多来自作者本人，@ 无意义。
+// 自定义 edited-message-template 完全接管正文，新正文不再自动追加。
+
+const DEFAULT_EDITED_TITLE_TEMPLATE = '✏️ PR #{{pr.number}} {{edit.summary}}';
+const DEFAULT_EDITED_MESSAGE_TEMPLATE = '{{pr.anchor}} {{pr.title}}';
+
+// 正文渲染上限：超过截断并提示看链接（飞书 post 消息有总大小限制，群里也不宜刷长文）。
+const EDITED_BODY_MAX_CHARS = 3000;
+const EDITED_BODY_TRIMMED_HINT = '……（正文过长已截断，点链接看全文）';
+
+async function assemblePrEdited(event, templates, token = '', resolveUrl = (url) => url) {
+  const pr = event.pull_request;
+  const changes = event.changes;
+  const titleChanged = changes.title !== undefined;
+  const bodyChanged = changes.body !== undefined;
+  const newBody = pr.body || '';
+
+  const stringVars = {
+    'pr.number': String(pr.number),
+    'pr.title': pr.title,
+    'pr.url': pr.html_url,
+    author: pr.user.login,
+    'changes.title.from': titleChanged ? changes.title.from : '',
+    'changes.body.from': bodyChanged ? changes.body.from : '',
+    'edit.summary': titleChanged && bodyChanged ? '标题和描述已更新' : titleChanged ? '标题已更新' : '描述已更新',
+  };
+
+  const resolvers = {
+    ...Object.fromEntries(Object.entries(stringVars).map(([k, v]) => [k, () => [{ tag: 'text', text: v }]])),
+    'pr.anchor': () => [{ tag: 'a', text: `PR #${pr.number}`, href: pr.html_url }],
+  };
+
+  const lines = renderElements(templates.message || DEFAULT_EDITED_MESSAGE_TEMPLATE, resolvers);
+
+  // 默认模板下正文变更把新正文渲染进卡片：清空给提示，超长截断；
+  // 逐行走 parseImgTags（与评论一致的图片链路，无 token 降级为链接）。
+  // 不 @ 正文里的任何人（edited 语义，见文件头注释）。
+  if (!templates.message && bodyChanged) {
+    const trimmed = newBody.trim();
+    if (!trimmed) {
+      lines.push([{ tag: 'text', text: '描述已清空' }]);
+    } else {
+      const sliced = trimmed.length > EDITED_BODY_MAX_CHARS ? trimmed.slice(0, EDITED_BODY_MAX_CHARS) : trimmed;
+      for (const line of sliced.split('\n')) {
+        if (!line.trim()) continue;
+        const els = await parseImgTags(line.trim(), token, resolveUrl);
+        lines.push(els.length > 0 ? els : [{ tag: 'text', text: line.trim() }]);
+      }
+      if (trimmed.length > EDITED_BODY_MAX_CHARS) {
+        lines.push([{ tag: 'text', text: EDITED_BODY_TRIMMED_HINT }]);
+      }
+    }
+  }
+
+  return {
+    title: renderString(templates.title || DEFAULT_EDITED_TITLE_TEMPLATE, stringVars),
+    lines,
+  };
+}
+
 // 解析 GitHub 上传图片的 <img> 标签，下载图片并上传飞书，返回 img 元素。
 // 飞书 webhook post 的 img 元素需要 image_key（先上传图片到飞书服务器）。
 // 没有 app-id/app-secret 时，降级为「📷 图片」超链接（点击跳转原图）。
@@ -4754,6 +4841,8 @@ function readInputs() {
       enableMention: process.env['INPUT_ENABLE-MENTION'],
       titleTemplate: process.env['INPUT_TITLE-TEMPLATE'] || '',
       messageTemplate: process.env['INPUT_MESSAGE-TEMPLATE'] || '',
+      editedTitleTemplate: process.env['INPUT_EDITED-TITLE-TEMPLATE'] || '',
+      editedMessageTemplate: process.env['INPUT_EDITED-MESSAGE-TEMPLATE'] || '',
       appId: process.env['INPUT_APP-ID'] || '',
       appSecret: process.env['INPUT_APP-SECRET'] || '',
       githubToken: process.env['INPUT_GITHUB-TOKEN'] || '',
@@ -4790,6 +4879,23 @@ function readEvent() {
     );
     title = review.title;
     content = review.lines;
+  } else if (event.action === 'edited' && event.pull_request) {
+    // pull_request edited 同样只走模板组装：GitHub payload 的 changes 携带旧值，
+    // 缺 changes / 空 changes 在 schema 层 fail-loud，不会发出空卡片。
+    // 带 pull_request 才进此分支：issue 等的 edited 事件保持走下方通用路径，行为不变。
+    const editedEvent = parseOrThrow(prEditedEventSchema, event, 'edited event');
+    // 有 github-token 时正文里的私有仓库图片同样经签名 URL 解析。
+    const editResolveUrl = inputs.githubToken
+      ? buildImageUrlResolver({ event, githubToken: inputs.githubToken })
+      : undefined;
+    const edited = await assemblePrEdited(
+      editedEvent,
+      { title: inputs.editedTitleTemplate, message: inputs.editedMessageTemplate },
+      token,
+      editResolveUrl,
+    );
+    title = edited.title;
+    content = edited.lines;
   } else {
     // enable-mention 在通用路径的语义：message 里的 @GitHub登录名 经 reviewer-map
     // 转换为飞书 @ 元素；未命中映射的保持纯文本（评论正文是用户内容，见 assemble 层）。

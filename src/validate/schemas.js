@@ -28,6 +28,8 @@ const inputsSchema = z.object({
     .transform((v) => v === 'true'),
   titleTemplate: z.string().default(''),
   messageTemplate: z.string().default(''),
+  editedTitleTemplate: z.string().default(''),
+  editedMessageTemplate: z.string().default(''),
   appId: z.string().default(''),
   appSecret: z.string().default(''),
   githubToken: z.string().default(''),
@@ -37,17 +39,20 @@ const inputsSchema = z.object({
 
 const userSchema = z.object({ login: z.string().min(1) }).passthrough();
 
+const prPullRequest = z
+  .object({
+    number: z.number().int().positive(),
+    title: z.string().default(''),
+    body: z.string().nullable().default(''),
+    html_url: z.string().url(),
+    user: userSchema,
+  })
+  .passthrough();
+
 const reviewRequestedEventSchema = z
   .object({
     action: z.literal('review_requested'),
-    pull_request: z
-      .object({
-        number: z.number().int().positive(),
-        title: z.string().default(''),
-        html_url: z.string().url(),
-        user: userSchema,
-      })
-      .passthrough(),
+    pull_request: prPullRequest,
     requested_reviewer: userSchema.optional(),
     requested_team: z
       .object({ slug: z.string().default(''), name: z.string().default('') })
@@ -58,6 +63,24 @@ const reviewRequestedEventSchema = z
   .refine((e) => e.requested_reviewer || e.requested_team, {
     message: 'review_requested event without requested_reviewer/requested_team',
   });
+
+// pull_request edited：changes 携带改动前旧值，且只含被编辑的字段。
+// 缺 changes 或 changes 既无 title 又无 body 属异常 payload，直接抛错，不静默发空卡片。
+const prEditedEventSchema = z
+  .object({
+    action: z.literal('edited'),
+    pull_request: prPullRequest,
+    changes: z
+      .object({
+        title: z.object({ from: z.string() }).passthrough().optional(),
+        body: z.object({ from: z.string() }).passthrough().optional(),
+      })
+      .passthrough()
+      .refine((c) => c.title !== undefined || c.body !== undefined, {
+        message: 'edited event with empty changes (expected changes.title.from and/or changes.body.from)',
+      }),
+  })
+  .passthrough();
 
 // ---- 输出 payload ----
 
@@ -94,4 +117,4 @@ function parseOrThrow(schema, data, what) {
   return result.data;
 }
 
-export { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow };
+export { inputsSchema, reviewRequestedEventSchema, prEditedEventSchema, payloadSchema, parseOrThrow };

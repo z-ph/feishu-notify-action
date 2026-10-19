@@ -29,6 +29,12 @@ inputs:
   message-template:
     description: 'Body template for review_requested events, one line per paragraph; extra element tokens: {{pr.anchor}} (PR link) and {{mention}} (@ reviewer)'
     required: false
+  edited-title-template:
+    description: 'Title template for pull_request edited events, variables: {{pr.number}} {{pr.title}} {{pr.url}} {{author}} {{edit.summary}} {{changes.title.from}} {{changes.body.from}}'
+    required: false
+  edited-message-template:
+    description: 'Body template for pull_request edited events, one line per paragraph; extra element token: {{pr.anchor}} (PR link). Default is the PR anchor + latest title; body edits append the latest body paragraphs (3000-char cap). Custom templates take over fully'
+    required: false
   app-id:
     description: 'Feishu app ID for image upload (enables inline image preview). Omit to fall back to image links.'
     required: false

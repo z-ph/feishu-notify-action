@@ -5,8 +5,8 @@ import { parseFlatYamlMap } from './src/tool/flatYaml.js';
 import { signPayload, sendToFeishu } from './src/tool/feishu.js';
 import feishuImage from './src/tool/feishuImage.js';
 import { buildImageUrlResolver } from './src/tool/githubImage.js';
-import { inputsSchema, reviewRequestedEventSchema, payloadSchema, parseOrThrow } from './src/validate/schemas.js';
-import { assembleReviewRequest, assembleGenericMessage } from './src/assemble/reviewRequest.js';
+import { inputsSchema, reviewRequestedEventSchema, prEditedEventSchema, payloadSchema, parseOrThrow } from './src/validate/schemas.js';
+import { assembleReviewRequest, assemblePrEdited, assembleGenericMessage } from './src/assemble/reviewRequest.js';
 
 // 入口：tool 层读原始输入 → validate 层校验 → assemble 层组装 → validate 层校验输出 → tool 层发送。
 // 校验失败一律抛错（::error:: + exit 1），不做任何静默兜底。
@@ -27,6 +27,8 @@ function readInputs() {
       enableMention: process.env['INPUT_ENABLE-MENTION'],
       titleTemplate: process.env['INPUT_TITLE-TEMPLATE'] || '',
       messageTemplate: process.env['INPUT_MESSAGE-TEMPLATE'] || '',
+      editedTitleTemplate: process.env['INPUT_EDITED-TITLE-TEMPLATE'] || '',
+      editedMessageTemplate: process.env['INPUT_EDITED-MESSAGE-TEMPLATE'] || '',
       appId: process.env['INPUT_APP-ID'] || '',
       appSecret: process.env['INPUT_APP-SECRET'] || '',
       githubToken: process.env['INPUT_GITHUB-TOKEN'] || '',
@@ -63,6 +65,23 @@ function readEvent() {
     );
     title = review.title;
     content = review.lines;
+  } else if (event.action === 'edited' && event.pull_request) {
+    // pull_request edited 同样只走模板组装：GitHub payload 的 changes 携带旧值，
+    // 缺 changes / 空 changes 在 schema 层 fail-loud，不会发出空卡片。
+    // 带 pull_request 才进此分支：issue 等的 edited 事件保持走下方通用路径，行为不变。
+    const editedEvent = parseOrThrow(prEditedEventSchema, event, 'edited event');
+    // 有 github-token 时正文里的私有仓库图片同样经签名 URL 解析。
+    const editResolveUrl = inputs.githubToken
+      ? buildImageUrlResolver({ event, githubToken: inputs.githubToken })
+      : undefined;
+    const edited = await assemblePrEdited(
+      editedEvent,
+      { title: inputs.editedTitleTemplate, message: inputs.editedMessageTemplate },
+      token,
+      editResolveUrl,
+    );
+    title = edited.title;
+    content = edited.lines;
   } else {
     // enable-mention 在通用路径的语义：message 里的 @GitHub登录名 经 reviewer-map
     // 转换为飞书 @ 元素；未命中映射的保持纯文本（评论正文是用户内容，见 assemble 层）。

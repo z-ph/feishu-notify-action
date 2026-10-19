@@ -15,6 +15,8 @@ Post a rich-text message to a [Feishu (飞书) custom bot](https://open.feishu.c
 | `enable-mention` | no | `'true'` enables @ mentions via `reviewer-map` (see below); default `'false'` sends the card without any mention |
 | `title-template` | no | Title template for `review_requested` events (see variables below) |
 | `message-template` | no | Body template for `review_requested` events, one line per paragraph |
+| `edited-title-template` | no | Title template for `pull_request` `edited` events (see variables below) |
+| `edited-message-template` | no | Body template for `pull_request` `edited` events, one line per paragraph |
 | `app-id` | no | Feishu app ID for image upload (enables inline image preview). Omit to fall back to image links |
 | `app-secret` | no | Feishu app secret for image upload. Required when `app-id` is set |
 | `github-token` | no | GitHub token to resolve **private-repo** `user-attachments` images via API `body_html` signed URLs. Pass `${{ secrets.GITHUB_TOKEN }}` (needs `issues:read` / `pull-requests:read`). Omit for public repos |
@@ -33,7 +35,7 @@ permissions:
   pull-requests: read
 ```
 
-Two mutually exclusive modes: `review_requested` events are always composed from the templates and event payload (`title` / `message` / `link` are ignored there); every other event uses the explicit `title` / `message` / `link` inputs. GitHub dispatches one `review_requested` event per requested reviewer, so each reviewer is mentioned exactly once. There is no degraded-mention fallback: with `enable-mention: 'true'` an unmapped reviewer is a configuration error and fails loudly.
+Three mutually exclusive modes: `review_requested` events are always composed from the templates and event payload (`title` / `message` / `link` are ignored there); `pull_request` `edited` events are composed from the edited templates and the payload's `changes` (same — explicit inputs are ignored, and a missing/empty `changes` fails the step instead of sending an empty card); every other event uses the explicit `title` / `message` / `link` inputs. GitHub dispatches one `review_requested` event per requested reviewer, so each reviewer is mentioned exactly once. There is no degraded-mention fallback: with `enable-mention: 'true'` an unmapped reviewer is a configuration error and fails loudly.
 
 ### @ mentions in `message` (non-`review_requested` events)
 
@@ -75,6 +77,40 @@ message-template: |
   提交人：{{author}}
   {{mention}} 请抽空评审，谢谢
 ```
+
+### PR edited 事件（标题/正文被编辑）
+
+`pull_request` 的 `edited` action（PR 标题或正文被编辑）走独立的模板组装，GitHub 在 payload 的 `changes` 中携带改动前的旧值：
+
+- 默认只发**编辑后的最新内容**：卡片标题经 `{{edit.summary}}` 说明改了什么（标题已更新 / 描述已更新 / 标题和描述已更新），正文区是 PR 锚点 + 最新标题；正文变更时把最新正文段落追加进卡片（超过 3000 字符截断并提示点链接看全文；正文清空时提示「描述已清空」），不看链接也能知道现在写成什么样；正文里的 `<img>` 图片走与评论一致的链路（有 `app-id`+`app-secret` 内联，否则降级为「📷 图片」链接）；正文按 markdown 源码逐行转纯文本，不做 markdown 渲染，也不做 diff；
+- 旧值不在默认卡片出现；`{{changes.title.from}}` / `{{changes.body.from}}` 仍暴露给自定义模板，需要「旧 → 新」对比的人自己组；
+- 默认不 @ 任何人（编辑大多来自作者本人）；
+- `changes` 缺失或为空的异常 payload 直接让 step 失败，不静默发空卡片。
+
+```yaml
+name: pr-edited-notify
+on:
+  pull_request:
+    types: [edited]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: z-ph/feishu-notify-action@v1
+        with:
+          webhook: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          secret: ${{ secrets.FEISHU_SECRET }}
+```
+
+Edited 模板变量：字符串变量 `{{pr.number}}`、`{{pr.title}}`、`{{pr.url}}`、`{{author}}`、`{{edit.summary}}`（`标题已更新` / `描述已更新` / `标题和描述已更新`）、`{{changes.title.from}}`、`{{changes.body.from}}`（未变化的一方渲染为空串）。元素 token：`{{pr.anchor}}`。默认值：
+
+```yaml
+edited-title-template: ✏️ PR #{{pr.number}} {{edit.summary}}
+edited-message-template: '{{pr.anchor}} {{pr.title}}'
+```
+
+默认模板下，正文变化时新正文段落自动追加在模板行之后（截断 3000 字符，清空时提示「描述已清空」）；一旦自定义 `edited-message-template`，正文不再自动追加，卡片完全由模板控制。
 
 Unknown variables fail the step with the list of available ones — no silent blanks.
 
